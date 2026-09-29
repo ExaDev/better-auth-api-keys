@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Web-only on purpose: no Node, Workers or Cloudflare types, so the package's source cannot name `Buffer`, `Env`, `D1Database` or `ExecutionContext` and stays portable to any runtime with Web Crypto. Config files and the Workers tests, which do need those types, are in tsconfig.node.json.
+    "lib": ["ES2024", "WebWorker"],
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

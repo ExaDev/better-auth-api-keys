@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Used only by vitest-pool-workers to run test/workers/**/*.test.ts inside a real Workers isolate against
+  // a real local D1 instance, proving the adapter-backed store through better-auth's Drizzle adapter on the
+  // genuine D1 engine. The tests create the tables they need themselves: this package ships no migrations.
+  "name": "better-auth-api-keys-workers-test",
+  // Pinned to the newest date the workerd binary bundled with this repo's pinned wrangler version
+  // actually supports; bump alongside wrangler, not independently.
+  "compatibility_date": "2026-08-22",
+  // better-auth itself needs it (its request context uses node:async_hooks), exactly as apps/api does; this
+  // package's own code uses only Web APIs.
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/index.ts",
+  "d1_databases": [
+    {
+      "binding": "DATABASE",
+      "database_name": "better-auth-api-keys-workers-test",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+}
