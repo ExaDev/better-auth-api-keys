@@ -10,7 +10,7 @@
   // better-auth itself needs it (its request context uses node:async_hooks), exactly as apps/api does; this
   // package's own code uses only Web APIs.
   "compatibility_flags": ["nodejs_compat"],
-  "main": "src/index.ts",
+  "main": "src/better-auth/index.ts",
   "d1_databases": [
     {
       "binding": "DATABASE",
