@@ -111,9 +111,9 @@ describe("the plugin on D1", () => {
     const defer = (task: Readonly<Promise<unknown>>) => {
       deferred.push(task);
     };
-    expect((await service.verify(created.plaintext, { defer })).outcome).toBe(
-      "valid",
-    );
+    const verified = await service.verify(created.plaintext);
+    if (verified.outcome !== "valid") throw new Error(verified.outcome);
+    await service.recordUse(verified.key, { defer });
     expect(await Promise.all(deferred.splice(0))).toEqual([
       { outcome: "touched" },
     ]);
@@ -124,9 +124,11 @@ describe("the plugin on D1", () => {
       .first("last_used_at");
     expect(lastUsed).toBe(created.key.createdAt.getTime());
 
-    expect((await service.verify(created.plaintext, { defer })).outcome).toBe(
-      "valid",
-    );
+    const again = await service.verify(created.plaintext);
+    if (again.outcome !== "valid") throw new Error(again.outcome);
+    expect(await service.recordUse(again.key, { defer })).toEqual({
+      outcome: "not-due",
+    });
     expect(deferred).toEqual([]);
 
     expect(
@@ -134,7 +136,7 @@ describe("the plugin on D1", () => {
     ).toEqual({
       outcome: "revoked",
     });
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "unknown",
     });
   });

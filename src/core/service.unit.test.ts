@@ -189,19 +189,19 @@ describe("ApiKeyService.create", () => {
 
 describe("ApiKeyService.verify", () => {
   it("accepts a key it created, with its scopes and claims", async () => {
-    const { service, defer } = serviceFixture();
+    const { service } = serviceFixture();
     const created = await service.create(
       input({ scopes: { access: "write", toolsets: ["artifacts"] } }),
     );
     if (created.outcome !== "created") throw new Error(created.outcome);
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "valid",
       key: created.key,
     });
   });
 
   it("refuses a malformed key offline, before any hash or read", async () => {
-    const { service, calls, defer } = serviceFixture();
+    const { service, calls } = serviceFixture();
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     calls.length = 0;
@@ -212,7 +212,7 @@ describe("ApiKeyService.verify", () => {
       `${created.plaintext.slice(0, -1)}${lastCharacter}`,
       created.plaintext.replace(TEST_PREFIX, "other_"),
     ]) {
-      expect(await service.verify(presented, { defer })).toEqual({
+      expect(await service.verify(presented)).toEqual({
         outcome: "malformed",
       });
     }
@@ -220,11 +220,11 @@ describe("ApiKeyService.verify", () => {
   });
 
   it("refuses a well-formed key nobody created as unknown, after one hash and one read", async () => {
-    const { service, calls, defer } = serviceFixture();
+    const { service, calls } = serviceFixture();
     const other = serviceFixture();
     const created = await other.service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "unknown",
     });
     expect(calls.map((call) => `${call.port}.${call.method}`)).toEqual([
@@ -235,7 +235,7 @@ describe("ApiKeyService.verify", () => {
 
   it("counts a stored key whose scopes or claims fail their schema as unknown", async () => {
     const store = createInMemoryApiKeyStore();
-    const { service, defer } = serviceFixture({ store });
+    const { service } = serviceFixture({ store });
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     const [stored] = await store.listByOwner("alice");
@@ -244,13 +244,13 @@ describe("ApiKeyService.verify", () => {
 
     await store.delete({ id: stored.id });
     await store.insert({ ...stored, scopes: { access: "everything" } });
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "unknown",
     });
 
     await store.delete({ id: stored.id });
     await store.insert({ ...stored, claims: "not an object" });
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "unknown",
     });
 
@@ -258,15 +258,13 @@ describe("ApiKeyService.verify", () => {
   });
 
   it("accepts a key until its expiry instant and refuses it from then on, naming it, its owner and its creation", async () => {
-    const { service, clock, defer } = serviceFixture();
+    const { service, clock } = serviceFixture();
     const created = await service.create(input({ lifetimeMs: DAY_MS }));
     if (created.outcome !== "created") throw new Error(created.outcome);
     clock.advance(DAY_MS - 1);
-    expect((await service.verify(created.plaintext, { defer })).outcome).toBe(
-      "valid",
-    );
+    expect((await service.verify(created.plaintext)).outcome).toBe("valid");
     clock.advance(1);
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "expired",
       id: created.key.id,
       ownerId: "alice",
@@ -274,14 +272,29 @@ describe("ApiKeyService.verify", () => {
     });
   });
 
-  it("does not write the last-used time of an expired key", async () => {
-    const { service, clock, deferred, defer } = serviceFixture();
-    const created = await service.create(input({ lifetimeMs: DAY_MS }));
+  it("never writes the last-used time itself, so a key the host refuses doesn't look used", async () => {
+    const { service, store, calls } = serviceFixture();
+    const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
-    clock.advance(DAY_MS);
-    await service.verify(created.plaintext, { defer });
-    expect(deferred).toEqual([]);
+    expect((await service.verify(created.plaintext)).outcome).toBe("valid");
+    expect(calls.some((call) => call.method === "touchLastUsed")).toBe(false);
+    expect((await store.listByOwner("alice"))[0]?.lastUsedAt).toBeUndefined();
   });
+});
+
+describe("ApiKeyService.recordUse", () => {
+  /** Verifies a key and records its use when it's valid, as a host that accepts every valid key does. */
+  async function useKey(
+    service: ReturnType<typeof serviceFixture>["service"],
+    plaintext: string,
+    defer: (task: Readonly<Promise<unknown>>) => void,
+  ) {
+    const verified = await service.verify(plaintext);
+    if (verified.outcome === "valid") {
+      await service.recordUse(verified.key, { defer });
+    }
+    return verified;
+  }
 
   it("writes the last-used time on first use, then not again until it is more than an interval old", async () => {
     const { service, store, clock, deferred, defer } = serviceFixture();
@@ -290,14 +303,14 @@ describe("ApiKeyService.verify", () => {
     const lastUsed = async () =>
       (await store.listByOwner("alice"))[0]?.lastUsedAt;
 
-    await service.verify(created.plaintext, { defer });
+    await useKey(service, created.plaintext, defer);
     expect(deferred).toHaveLength(1);
     expect(await deferred[0]).toEqual({ outcome: "touched" });
     expect(await lastUsed()).toEqual(TEST_START);
 
-    await service.verify(created.plaintext, { defer });
+    await useKey(service, created.plaintext, defer);
     clock.advance(TEST_LAST_USED_INTERVAL_MS);
-    const atInterval = await service.verify(created.plaintext, { defer });
+    const atInterval = await useKey(service, created.plaintext, defer);
     expect(deferred).toHaveLength(1);
     expect(atInterval).toEqual({
       outcome: "valid",
@@ -305,7 +318,7 @@ describe("ApiKeyService.verify", () => {
     });
 
     clock.advance(1);
-    await service.verify(created.plaintext, { defer });
+    await useKey(service, created.plaintext, defer);
     expect(deferred).toHaveLength(2);
     expect(await deferred[1]).toEqual({ outcome: "touched" });
     expect(await lastUsed()).toEqual(
@@ -321,7 +334,7 @@ describe("ApiKeyService.verify", () => {
       (INTERVALS_OBSERVED * TEST_LAST_USED_INTERVAL_MS) / MINUTE_MS;
     const outcomes: string[] = [];
     for (let elapsed = 0; elapsed < minutes; elapsed++) {
-      await service.verify(created.plaintext, { defer });
+      await useKey(service, created.plaintext, defer);
       for (const task of deferred.splice(0)) {
         const result = await task;
         if (
@@ -342,8 +355,8 @@ describe("ApiKeyService.verify", () => {
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     await Promise.all([
-      service.verify(created.plaintext, { defer }),
-      service.verify(created.plaintext, { defer }),
+      useKey(service, created.plaintext, defer),
+      useKey(service, created.plaintext, defer),
     ]);
     const results = await Promise.all(deferred);
     expect(results).toContainEqual({ outcome: "touched" });
@@ -396,13 +409,13 @@ describe("ApiKeyService.list", () => {
 
 describe("ApiKeyService.revoke and revokeAllForOwner", () => {
   it("revokes a key so it no longer verifies", async () => {
-    const { service, defer } = serviceFixture();
+    const { service } = serviceFixture();
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     expect(await service.revoke({ id: created.key.id })).toEqual({
       outcome: "revoked",
     });
-    expect(await service.verify(created.plaintext, { defer })).toEqual({
+    expect(await service.verify(created.plaintext)).toEqual({
       outcome: "unknown",
     });
     expect(await service.revoke({ id: created.key.id })).toEqual({
@@ -411,19 +424,17 @@ describe("ApiKeyService.revoke and revokeAllForOwner", () => {
   });
 
   it("refuses to revoke another owner's key when an owner is named", async () => {
-    const { service, defer } = serviceFixture();
+    const { service } = serviceFixture();
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     expect(await service.revoke({ id: created.key.id, owner: bob })).toEqual({
       outcome: "not-found",
     });
-    expect((await service.verify(created.plaintext, { defer })).outcome).toBe(
-      "valid",
-    );
+    expect((await service.verify(created.plaintext)).outcome).toBe("valid");
   });
 
   it("revokes every key of one owner and leaves others working", async () => {
-    const { service, defer } = serviceFixture();
+    const { service } = serviceFixture();
     const first = await service.create(input({ name: "one" }));
     const second = await service.create(input({ name: "two" }));
     const bobs = await service.create(input({ owner: bob }));
@@ -435,15 +446,9 @@ describe("ApiKeyService.revoke and revokeAllForOwner", () => {
       throw new Error("not created");
     }
     expect(await service.revokeAllForOwner(alice)).toEqual({ revoked: 2 });
-    expect((await service.verify(first.plaintext, { defer })).outcome).toBe(
-      "unknown",
-    );
-    expect((await service.verify(second.plaintext, { defer })).outcome).toBe(
-      "unknown",
-    );
-    expect((await service.verify(bobs.plaintext, { defer })).outcome).toBe(
-      "valid",
-    );
+    expect((await service.verify(first.plaintext)).outcome).toBe("unknown");
+    expect((await service.verify(second.plaintext)).outcome).toBe("unknown");
+    expect((await service.verify(bobs.plaintext)).outcome).toBe("valid");
     expect(await service.revokeAllForOwner(alice)).toEqual({ revoked: 0 });
   });
 });
@@ -471,7 +476,7 @@ describe("ApiKeyService.authorise", () => {
 
 describe("abort signals", () => {
   it("refuses every operation once its signal has aborted, before touching a port", async () => {
-    const { service, calls, defer } = serviceFixture();
+    const { service, calls } = serviceFixture();
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     calls.length = 0;
@@ -479,9 +484,9 @@ describe("abort signals", () => {
     await expect(
       service.create(input({ name: "other" }), { signal }),
     ).rejects.toThrow("aborted by the test");
-    await expect(
-      service.verify(created.plaintext, { defer, signal }),
-    ).rejects.toThrow("aborted");
+    await expect(service.verify(created.plaintext, { signal })).rejects.toThrow(
+      "aborted",
+    );
     await expect(service.list(alice, { signal })).rejects.toThrow("aborted");
     await expect(
       service.revoke({ id: created.key.id }, { signal }),
@@ -493,11 +498,11 @@ describe("abort signals", () => {
   });
 
   it("passes the caller's signal to every port it calls", async () => {
-    const { service, calls, defer } = serviceFixture();
+    const { service, calls } = serviceFixture();
     const signal = new AbortController().signal;
     const created = await service.create(input(), { signal });
     if (created.outcome !== "created") throw new Error(created.outcome);
-    await service.verify(created.plaintext, { defer, signal });
+    await service.verify(created.plaintext, { signal });
     await service.list(alice, { signal });
     await service.revoke({ id: "missing" }, { signal });
     await service.revokeAllForOwner(bob, { signal });
@@ -515,10 +520,16 @@ describe("abort signals", () => {
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     const controller = new AbortController();
-    await service.verify(created.plaintext, {
-      defer,
+    const verified = await service.verify(created.plaintext, {
       signal: controller.signal,
     });
+    if (verified.outcome !== "valid") throw new Error(verified.outcome);
+    expect(
+      await service.recordUse(verified.key, {
+        defer,
+        signal: controller.signal,
+      }),
+    ).toEqual({ outcome: "scheduled" });
     controller.abort();
     expect(await deferred[0]).toEqual({ outcome: "touched" });
     const touch = calls.find((call) => call.method === "touchLastUsed");

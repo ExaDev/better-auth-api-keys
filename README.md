@@ -11,7 +11,7 @@ A key looks like `exshow_` followed by 43 base62 characters and a 6-character ba
 - **Peppered hash only.** The key itself is never stored. The database holds `HMAC-SHA256(pepper, key)` in a unique column, where the pepper is a server secret kept out of the database (in `show`, the `API_KEY_PEPPER` Worker secret). A copy of the database alone gives nothing to test guesses against. The hasher is injected, and the Web Crypto one caches its imported key per instance.
 - **One indexed lookup.** A presented key is found by an equality match on its hash, so no constant-time comparison is needed: the lookup reveals nothing a guess could build on.
 - **Every key expires.** An expiry is required at creation, bounded by the host's `maxLifetimeMs`. A key is valid up to, not at, its expiry instant.
-- **Throttled last-used write.** Verification reads; it does not write on every request. When a key's recorded last use is older than the host's `lastUsedIntervalMs`, `verify` hands one conditional write to the host's `defer` (a Worker's `ctx.waitUntil`), which sets the time only if it is still older than the cut-off, so a busy key costs at most one write per interval and two racing requests write once.
+- **Throttled last-used write, only for keys the host accepts.** `verify` only reads, so a key the host goes on to refuse for its own reasons (its owner disabled, say) never looks used. Once the host accepts a key it calls `recordUse`, which, when the key's recorded last use is older than the host's `lastUsedIntervalMs`, hands one conditional write to the host's `defer` (a Worker's `ctx.waitUntil`) that sets the time only if it is still older than the cut-off, so a busy key costs at most one write per interval and two racing requests write once.
 - **No session hook.** The plugin contributes no endpoints, no hooks, no middleware and no rate-limit rules. A key authenticates only where the host calls `verify` itself; it never becomes a better-auth session, so it cannot reach better-auth's own endpoints.
 - **Scopes and claims are the host's.** Both are opaque to the package, typed by Zod schemas the host injects and stored as JSON. They are validated on creation and on every read; a stored key whose scopes or claims no longer pass the schemas verifies as `unknown`, and lists as `unreadable` so its owner can still revoke it. Whether scopes permit a request is decided by the host's injected authoriser.
 
@@ -44,10 +44,12 @@ export const apiKeyPlugin = apiKeys({
 // betterAuth({ ..., plugins: [apiKeyPlugin] })
 
 const service = apiKeysOf(await auth.$context, apiKeyPlugin);
-const result = await service.verify(presentedKey, {
-  signal: request.signal,
-  defer: (task) => ctx.waitUntil(task),
-});
+const result = await service.verify(presentedKey, { signal: request.signal });
+if (result.outcome === "valid" /* and the host's own checks accept it */) {
+  await service.recordUse(result.key, {
+    defer: (task) => ctx.waitUntil(task),
+  });
+}
 ```
 
 The plugin registers an `apiKey` model (`id`, `userId` referencing `user.id` with cascading delete, `name`, `keyHash` unique, `start`, `scopes` and `claims` as JSON, `createdAt`, `expiresAt`, and an unindexed nullable `lastUsedAt`, with `(userId, name)` unique). Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.

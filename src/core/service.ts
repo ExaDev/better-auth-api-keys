@@ -107,11 +107,15 @@ export type VerifyApiKeyResult<Scopes, Claims> =
     };
 
 /**
- * Options for {@link ApiKeyService.verify}. `defer` receives the last-used write, when one is due, so the host can let it finish after the response (a Worker's `ctx.waitUntil`). The write deliberately does not take `signal`: it belongs to no single request and must not be cut short when the request that triggered it ends.
+ * Options for {@link ApiKeyService.recordUse}. `defer` receives the last-used write, when one is due, so the host can let it finish after the response (a Worker's `ctx.waitUntil`). The write deliberately does not take `signal`: it belongs to no single request and must not be cut short when the request that triggered it ends.
  */
-export interface VerifyApiKeyOptions extends PortCallOptions {
+export interface RecordApiKeyUseOptions extends PortCallOptions {
   readonly defer: (task: Readonly<Promise<unknown>>) => void;
 }
+
+/** The result of {@link ApiKeyService.recordUse}: the last-used write was handed to `defer`, or the recorded time is recent enough that none is due. */
+export type RecordApiKeyUseResult =
+  { readonly outcome: "scheduled" } | { readonly outcome: "not-due" };
 
 /** One entry of {@link ApiKeyService.list}. A key whose stored scopes or claims no longer pass the host's schemas is listed as `unreadable` rather than hidden, so its owner can still see and revoke it. */
 export type ListedApiKey<Scopes, Claims> =
@@ -145,12 +149,20 @@ export interface ApiKeyService<Scopes, Claims, Request> {
     options?: PortCallOptions,
   ) => Promise<{ readonly revoked: number }>;
   /**
-   * Checks a presented key: the offline format check first, and only then one hash and one lookup, the stored scopes and claims against the host's schemas, and expiry. Hands a last-used write to `options.defer` only when the stored time is older than the last-used interval, so a busy key costs one write per interval, not one per request.
+   * Checks a presented key: the offline format check first, and only then one hash and one lookup, the stored scopes and claims against the host's schemas, and expiry. Reads only: a key the host goes on to refuse for its own reasons (its owner disabled, say) must not look used, so recording the use is the host's separate call, {@link ApiKeyService.recordUse}, once it accepts the key.
    */
   verify: (
     presented: string,
-    options: VerifyApiKeyOptions,
+    options?: PortCallOptions,
   ) => Promise<VerifyApiKeyResult<Scopes, Claims>>;
+  /**
+   * Records that the host accepted a verified key: hands a last-used write to `options.defer` only when the key's recorded last use is older than the last-used interval, so a busy key costs one write per interval, not one per request. The write is conditional in the store as well, so two racing uses write once.
+   * @param key - The key as {@link ApiKeyService.verify} returned it.
+   */
+  recordUse: (
+    key: Readonly<Pick<ApiKeySummary, "id" | "lastUsedAt">>,
+    options: RecordApiKeyUseOptions,
+  ) => Promise<RecordApiKeyUseResult>;
   /** Whether `key`'s scopes permit `request`, by the injected authoriser. */
   authorise: (
     key: ApiKey<Scopes, Claims>,
@@ -272,14 +284,12 @@ export function createApiKeyService<
     },
 
     async verify(presented, verifyOptions) {
-      const { defer, signal } = verifyOptions;
+      const signal = verifyOptions?.signal;
       signal?.throwIfAborted();
       if (!hasKeyFormat(prefix, presented)) return { outcome: "malformed" };
       const found = await store.findByHash(
         await hasher.hash(presented, { signal }),
-        {
-          signal,
-        },
+        { signal },
       );
       if (found.outcome === "not-found") return { outcome: "unknown" };
       const key = readable(found.key);
@@ -293,11 +303,19 @@ export function createApiKeyService<
           createdAt: key.createdAt,
         };
       }
-      const notSince = lastUsedCutOff(now, lastUsedIntervalMs);
-      if (isLastUsedStale(key.lastUsedAt, notSince)) {
-        defer(store.touchLastUsed(key.id, now, notSince));
-      }
       return { outcome: "valid", key };
+    },
+
+    async recordUse(key, useOptions) {
+      const { defer, signal } = useOptions;
+      signal?.throwIfAborted();
+      const now = await clock.now({ signal });
+      const notSince = lastUsedCutOff(now, lastUsedIntervalMs);
+      if (!isLastUsedStale(key.lastUsedAt, notSince)) {
+        return { outcome: "not-due" };
+      }
+      defer(store.touchLastUsed(key.id, now, notSince));
+      return { outcome: "scheduled" };
     },
 
     authorise(key, request) {

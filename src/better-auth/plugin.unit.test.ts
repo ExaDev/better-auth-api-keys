@@ -109,12 +109,13 @@ describe("the apiKeys plugin", () => {
     const created = await service.create(createInput);
     if (created.outcome !== "created") throw new Error(created.outcome);
     const deferred: Promise<unknown>[] = [];
-    const verified = await service.verify(created.plaintext, {
+    const verified = await service.verify(created.plaintext);
+    expect(verified).toEqual({ outcome: "valid", key: created.key });
+    await service.recordUse(created.key, {
       defer: (task) => {
         deferred.push(task);
       },
     });
-    expect(verified).toEqual({ outcome: "valid", key: created.key });
     expect(await Promise.all(deferred)).toEqual([{ outcome: "touched" }]);
     expect(
       await context.adapter.findMany({ model: API_KEY_MODEL }),

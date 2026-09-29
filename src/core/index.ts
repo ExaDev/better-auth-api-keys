@@ -21,7 +21,8 @@ export {
   type InvalidApiKeyField,
   type JsonObjectSchema,
   type ListedApiKey,
+  type RecordApiKeyUseOptions,
+  type RecordApiKeyUseResult,
   type RevokeApiKeyResult,
-  type VerifyApiKeyOptions,
   type VerifyApiKeyResult,
 } from "./service.ts";
