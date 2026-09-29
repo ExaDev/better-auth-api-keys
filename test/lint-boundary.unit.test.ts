@@ -9,6 +9,12 @@ const LINT_TIMEOUT_MS = 120_000;
 const eslint = new ESLint({
   cwd: packageRoot,
   ruleFilter: ({ ruleId }) => ruleId === "no-restricted-imports",
+  // Under CI=true typescript-eslint assumes a single run and parses each file from disk, ignoring the text lintText is given, so these imports would never be seen.
+  overrideConfig: {
+    languageOptions: {
+      parserOptions: { disallowAutomaticSingleRunInference: true },
+    },
+  },
 });
 
 /** Which of `specifiers` the package's own lint configuration refuses when imported in `file`, from one lint of one import per line. `file` must be a real source file so the typed parser finds it in the package's program. */
