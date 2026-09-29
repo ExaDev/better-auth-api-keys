@@ -93,7 +93,7 @@ export type CreateApiKeyResult<Scopes, Claims> =
   | { readonly outcome: "name-taken" };
 
 /**
- * The result of {@link ApiKeyService.verify}. `malformed` means the presented string failed the offline check, so nothing was hashed or read; `unknown` means no stored key matches it, or the stored key's scopes or claims no longer pass the host's schemas; `expired` names the key so the host can say which one.
+ * The result of {@link ApiKeyService.verify}. `malformed` means the presented string failed the offline check, so nothing was hashed or read; `unknown` means no stored key matches it, or the stored key's scopes or claims no longer pass the host's schemas; `expired` names the key, its owner and when it was created, so the host can say which key it was and still apply its own refusals that outrank expiry (a disabled owner, or a key older than the owner's last sign-out everywhere).
  */
 export type VerifyApiKeyResult<Scopes, Claims> =
   | { readonly outcome: "valid"; readonly key: ApiKey<Scopes, Claims> }
@@ -103,6 +103,7 @@ export type VerifyApiKeyResult<Scopes, Claims> =
       readonly outcome: "expired";
       readonly id: string;
       readonly ownerId: string;
+      readonly createdAt: Date;
     };
 
 /**
@@ -285,7 +286,12 @@ export function createApiKeyService<
       if (key === undefined) return { outcome: "unknown" };
       const now = await clock.now({ signal });
       if (isExpired(key.expiresAt, now)) {
-        return { outcome: "expired", id: key.id, ownerId: key.ownerId };
+        return {
+          outcome: "expired",
+          id: key.id,
+          ownerId: key.ownerId,
+          createdAt: key.createdAt,
+        };
       }
       const notSince = lastUsedCutOff(now, lastUsedIntervalMs);
       if (isLastUsedStale(key.lastUsedAt, notSince)) {

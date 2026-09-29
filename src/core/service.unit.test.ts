@@ -257,7 +257,7 @@ describe("ApiKeyService.verify", () => {
     expect(await hasher.hash(created.plaintext)).toBe(stored.keyHash);
   });
 
-  it("accepts a key until its expiry instant and refuses it from then on, naming it", async () => {
+  it("accepts a key until its expiry instant and refuses it from then on, naming it, its owner and its creation", async () => {
     const { service, clock, defer } = serviceFixture();
     const created = await service.create(input({ lifetimeMs: DAY_MS }));
     if (created.outcome !== "created") throw new Error(created.outcome);
@@ -270,6 +270,7 @@ describe("ApiKeyService.verify", () => {
       outcome: "expired",
       id: created.key.id,
       ownerId: "alice",
+      createdAt: created.key.createdAt,
     });
   });
 
