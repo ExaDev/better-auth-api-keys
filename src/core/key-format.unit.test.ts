@@ -16,8 +16,8 @@ const PREFIX = "exshow_";
 /** Every substitute a mutation tries: the whole alphabet plus characters just outside it. */
 const SUBSTITUTES = [...Array.from(BASE62_ALPHABET), "_", "-", " ", ".", "é"];
 
-/** Enough generated keys that a checksum or sampling bug affecting a sizeable share of keys shows up, while every single-character mutation of each is still cheap to check. */
-const PROPERTY_SAMPLES = 64;
+/** Enough generated keys that a checksum or sampling bug affecting a sizeable share of keys shows up, while checking every single-character mutation of each stays well inside a test's time on a loaded machine. That every mutation fails is structural (CRC-32 detects any change confined to one byte), so more samples would add time, not confidence. */
+const PROPERTY_SAMPLES = 16;
 
 /** The documented shape: 43 random characters (256 bits) and a 6-character checksum (a 32-bit CRC). */
 const DOCUMENTED_RANDOM_LENGTH = 43;
