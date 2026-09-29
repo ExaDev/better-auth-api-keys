@@ -8,7 +8,6 @@ import {
 import { seededRandomSource } from "../test-support/random-sources.ts";
 import {
   DAY_MS,
-  HOUR_MS,
   TEST_LAST_USED_INTERVAL_MS,
   TEST_MAX_LIFETIME_MS,
   TEST_PREFIX,
@@ -82,7 +81,10 @@ describe("createApiKeyService", () => {
       createApiKeyService({ ...valid, lastUsedIntervalMs: 0 }),
     ).toThrow();
     expect(() =>
-      createApiKeyService({ ...valid, lastUsedIntervalMs: -HOUR_MS }),
+      createApiKeyService({
+        ...valid,
+        lastUsedIntervalMs: -TEST_LAST_USED_INTERVAL_MS,
+      }),
     ).toThrow();
   });
 });

@@ -17,7 +17,7 @@ import { createWebCryptoKeyHasher } from "../web-crypto/index.ts";
 import { seededRandomSource } from "./random-sources.ts";
 
 export const TEST_PREFIX = "test_";
-export const HOUR_MS = 3_600_000;
+const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 const DAYS_PER_YEAR = 365;
 export const TEST_MAX_LIFETIME_MS = DAYS_PER_YEAR * DAY_MS;
@@ -53,7 +53,7 @@ export const testAuthoriser: ScopeAuthoriser<TestScopes, TestRequest> = {
 };
 
 /** One call a spied port received, with the signal it was given. */
-export interface PortCall {
+interface PortCall {
   readonly port: "store" | "hasher" | "random" | "clock";
   readonly method: string;
   readonly signal: AbortSignal | undefined;
