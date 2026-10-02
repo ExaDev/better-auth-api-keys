@@ -18,6 +18,16 @@ export const apiKeyNameSchema = z.string().check(
 
 const ownerIdSchema = z.string().check(z.minLength(1));
 
+/**
+ * The longest creator a key may record. A host names its creator by a user id or an email address, and an email address is at most 254 characters (RFC 5321 limits a forward path to 256 octets, two of them its angle brackets), so this fits either while keeping an arbitrary string the host passes through by mistake out of every key's row.
+ */
+export const API_KEY_CREATED_BY_MAX_LENGTH = 254;
+
+/** Who created a key, as the host names them: plain text, never resolved against any table. */
+export const apiKeyCreatedBySchema = z
+  .string()
+  .check(z.minLength(1), z.maxLength(API_KEY_CREATED_BY_MAX_LENGTH));
+
 /** A key owned by a person: the id of a row in better-auth's `user` table. Deleting the person deletes their keys. */
 export const apiKeyUserOwnerSchema = z.object({
   kind: z.literal("user"),
@@ -61,7 +71,7 @@ export const storedApiKeySchema = z.object({
   /** When the key stops authenticating, or `null` for a system principal's key the host chose to create with no expiry. Explicitly `null`, never absent, so a store that drops the field fails validation rather than silently granting a key that never expires. */
   expiresAt: z.nullable(z.date()),
   /** Who created the key, as the host names them: plain text with no reference to any table, so removing the creator changes nothing about the key. Absent when the host did not say. */
-  createdBy: z.optional(z.string().check(z.minLength(1))),
+  createdBy: z.optional(apiKeyCreatedBySchema),
   /** When the key last authenticated a request, to within the service's last-used interval; absent until its first use. */
   lastUsedAt: z.optional(z.date()),
 });

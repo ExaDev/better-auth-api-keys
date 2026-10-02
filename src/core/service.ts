@@ -1,5 +1,6 @@
 import * as z from "zod/mini";
 import {
+  apiKeyCreatedBySchema,
   apiKeyNameSchema,
   apiKeyOwnerSchema,
   type ApiKey,
@@ -72,7 +73,7 @@ export interface ApiKeyServiceOptions<
 }
 
 /**
- * What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`; `null` creates a key that never expires, which is refused unless the owner is a system principal and the service's `allowNonExpiringSystemKeys` is on. `createdBy` names who created the key, as plain text the package stores and never resolves.
+ * What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`; `null` creates a key that never expires, which is refused unless the owner is a system principal and the service's `allowNonExpiringSystemKeys` is on. `createdBy` names who created the key, as plain text of at most `API_KEY_CREATED_BY_MAX_LENGTH` characters that the package stores and never resolves.
  */
 export interface CreateApiKeyInput<Scopes, Claims> {
   readonly owner: ApiKeyOwner;
@@ -196,8 +197,7 @@ function ownerOf(owner: Readonly<ApiKeyOwner>): ApiKeyOwner {
   return z.parse(apiKeyOwnerSchema, owner);
 }
 
-/** Who created a key, when the host says: any non-empty text, never resolved against a table. */
-const createdBySchema = z.optional(z.string().check(z.minLength(1)));
+const createdBySchema = z.optional(apiKeyCreatedBySchema);
 
 /**
  * Builds the API-key service over its ports. Pure domain logic: it reads time only from `clock`, randomness only from `random` and hashes only through `hasher`, and passes each call's `signal` to every port it calls. Throws if the settings are unusable.

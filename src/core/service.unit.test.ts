@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  API_KEY_CREATED_BY_MAX_LENGTH,
   API_KEY_NAME_MAX_LENGTH,
   type ApiKeySystemOwner,
   type ApiKeyUserOwner,
@@ -633,12 +634,21 @@ describe("system principals' keys", () => {
     expect((await service.verify(principals.plaintext)).outcome).toBe("valid");
   });
 
-  it("refuses an empty creator", async () => {
+  it("refuses an empty or over-long creator, and accepts one of the maximum length", async () => {
     const { service } = serviceFixture();
-    expect(await service.create(input({ createdBy: "" }))).toEqual({
-      outcome: "invalid",
-      field: "createdBy",
-    });
+    for (const createdBy of [
+      "",
+      "x".repeat(API_KEY_CREATED_BY_MAX_LENGTH + 1),
+    ]) {
+      expect(await service.create(input({ createdBy }))).toEqual({
+        outcome: "invalid",
+        field: "createdBy",
+      });
+    }
+    const created = await service.create(
+      input({ createdBy: "x".repeat(API_KEY_CREATED_BY_MAX_LENGTH) }),
+    );
+    expect(created.outcome).toBe("created");
   });
 
   it("keeps names unique per owner: a person and a principal with the same id may each use a name once", async () => {
