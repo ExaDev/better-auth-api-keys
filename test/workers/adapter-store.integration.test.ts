@@ -33,7 +33,8 @@ import {
   resetDatabase,
   resetToV0_1_0,
 } from "./d1-fixture.ts";
-import { readmeMigration, statementsOf } from "./readme-migration.ts";
+import { statementsOf } from "./readme-schema.ts";
+import { V0_1_0_DELETE_ORPHANED_KEYS } from "./v0.1.0-migration.ts";
 
 const LIFETIME_DAYS = 30;
 const LIFETIME_MS = LIFETIME_DAYS * DAY_MS;
@@ -347,13 +348,7 @@ describe("upgrading a 0.1.0 database", () => {
     return { plaintext, row };
   }
 
-  it("gives the plain SQLite migration exactly the D1 file's statements, inside one transaction", () => {
-    const { d1, sqlite } = readmeMigration();
-    expect(statementsOf(d1).length).toBeGreaterThan(0);
-    expect(sqlite).toBe(`PRAGMA foreign_keys = ON;\nBEGIN;\n${d1}COMMIT;\n`);
-  });
-
-  it("copies every column of a person's key unchanged in the README's migration, builds the declared table, keeps the key verifying, and then accepts system keys", async () => {
+  it("copies every column of a person's key unchanged in the migration, builds the README's table, keeps the key verifying, and then accepts system keys", async () => {
     await resetDatabase();
     const declared = await describeApiKeyTable();
     await resetToV0_1_0();
@@ -362,7 +357,7 @@ describe("upgrading a 0.1.0 database", () => {
 
     await migrateFromV0_1_0();
 
-    // The database's own description of the migrated table, compared with the table the hand-written API_KEY_TABLE statements build (which the Drizzle declaration in d1-fixture.ts mirrors, and better-auth's schema check compares with the plugin). better-auth's Drizzle schema check never reads the database, so it cannot tell whether a migration ran.
+    // The database's own description of the migrated table, compared with the table the README's SQL builds in a new database (which the Drizzle declaration in d1-fixture.ts mirrors, and better-auth's schema check compares with the plugin). better-auth's Drizzle schema check never reads the database, so it cannot tell whether a migration ran.
     expect(await describeApiKeyTable()).toEqual(declared);
     // The comparison covers key_hash's UNIQUE constraint only because the description reports it per column; its index is SQLite's own, not one CREATE INDEX made.
     expect(
@@ -446,7 +441,7 @@ describe("upgrading a 0.1.0 database", () => {
     expect(remaining.results).toEqual([{ id: "principals" }]);
   });
 
-  it("deletes only the keys whose person is gone with the README's statement, after which the migration succeeds", async () => {
+  it("deletes only the keys whose person is gone with the orphan deletion, after which the migration succeeds", async () => {
     await resetToV0_1_0({ foreignKeys: false });
     await addUser("alice");
     await addUser("bob");
@@ -455,7 +450,7 @@ describe("upgrading a 0.1.0 database", () => {
     await insertV0_1_0Key("orphaned", "nobody");
 
     await env.DATABASE.batch(
-      statementsOf(readmeMigration().deleteOrphans).map((statement) =>
+      statementsOf(V0_1_0_DELETE_ORPHANED_KEYS).map((statement) =>
         env.DATABASE.prepare(statement),
       ),
     );
