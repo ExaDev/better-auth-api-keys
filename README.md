@@ -8,6 +8,18 @@ pnpm add @exadev/better-auth-api-keys zod better-auth @better-auth/core
 
 The peer ranges are `zod` `^4.0.0` and `better-auth` and `@better-auth/core` `^1.7.5`. CI runs the tests against the lowest and the newest version each range admits.
 
+## Upgrading from 0.1.0
+
+0.2.0 is a minor version only because the package is below 1.0; it breaks hosts and custom stores. In order:
+
+1. **Migrate the database first, then deploy.** The `apiKey` table gains `ownerKind`, `ownerId` and `createdBy`, and `userId` and `expiresAt` become nullable. On SQLite and D1 that is a table rebuild that must run as one transaction, after deleting any keys whose person is gone: see [Migrating the database from 0.1.0](https://github.com/ExaDev/better-auth-api-keys#migrating-the-database-from-010). Code on 0.2.0 against the old table fails every read and write; code on 0.1.0 against the new table cannot create keys.
+2. **Name the kind of every owner.** `create`, `list`, `revoke` and `revokeAllForOwner` refuse 0.1.0's `{ id }`: a person is `{ kind: "user", id }`, a system principal `{ kind: "system", id }`. `apiKeyOwnerSchema` and `ApiKeyOwner` are now that discriminated union.
+3. **Read the owner as `owner`, after checking its kind.** Keys (from `create`, `verify` and `list`) and `verify`'s `expired` result have `owner` instead of `ownerId`. Replace each `ownerId` with `owner.id`, and look the owner up in the people table only when `owner.kind` is `"user"`: a principal's id may equal a person's.
+4. **Handle a key with no expiry.** `expiresAt` is `Date | null` (null only for a system principal's key the host allowed with `allowNonExpiringSystemKeys`), and `create`'s `lifetimeMs` accepts `null`.
+5. **Handle `list`'s new `corrupt` status.** An entry is `valid`, `unreadable` or `corrupt`; a `corrupt` entry has `id` and `owner` but no `key`, so an exhaustive `switch` on `status` needs a case for it, and code must check `status` before reading `entry.key`.
+6. **Handle `create`'s new invalid field.** `create` can refuse `createdBy` (empty, or over `API_KEY_CREATED_BY_MAX_LENGTH`), so an exhaustive `switch` on an `invalid` result's `field` needs a `"createdBy"` case.
+7. **Custom stores only.** `ApiKeyStore` takes an owner (`{ kind, id }`) where it took an owner id in `listByOwner`, `delete` and `deleteByOwner`; stored keys carry `owner`, an optional `createdBy` and a nullable `expiresAt`; and `listByOwner` returns listings, `{ outcome: "stored", key }` or `{ outcome: "corrupt", id }`. `API_KEYS_CONTRACT_VERSION` is 2, so a store written for 1 stops type-checking.
+
 ## Security model
 
 A key is a prefix the host chooses (`exshow_` in the examples here) followed by 43 base62 characters and a 6-character base62 checksum.
@@ -93,7 +105,7 @@ The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"`
 
 better-auth's schema cannot express a check across columns, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` does not agree with its owner (verifying such a key throws; listing its owner's keys reports it as `corrupt`, by id, beside the rest, so it can be revoked without hiding the others), and the service refuses a person's key with no expiry whatever the database holds. A host's own migration should add the same rule as a check constraint, as the SQLite one below does.
 
-### Upgrading from 0.1.0
+### Migrating the database from 0.1.0
 
 0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none). better-auth's schema check will not tell you it is missing: with the Drizzle adapter it compares the plugin's schema with the host's Drizzle declaration, not with the database, so it catches a declaration left on 0.1.0 but not a migration that never ran. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's.
 
@@ -206,8 +218,6 @@ export const apiKey = sqliteTable(
   ],
 );
 ```
-
-Every owner the host passes to the service needs its `kind` now: 0.1.0's `{ id }` is refused, so each call site says `{ kind: "user", id }` for a person. Keys and the `expired` result carry `owner` in place of 0.1.0's `ownerId`, so every read of `ownerId` becomes `owner.id` after a check of `owner.kind`. Two types widen: `expiresAt` is `Date | null`, and `create`'s `lifetimeMs` accepts `null`. `list` can also return a `corrupt` entry, which has an `id` and `owner` but no `key`. A custom `ApiKeyStore` takes owners rather than owner ids, stores `owner`, `createdBy` and a nullable `expiresAt`, and returns `listByOwner`'s keys as `{ outcome: "stored", key }` listings, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
 
 ## Entry points
 
