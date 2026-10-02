@@ -1,12 +1,18 @@
 import {
   API_KEYS_CONTRACT_VERSION,
+  type ApiKeyOwner,
   type ApiKeyStore,
   type StoredApiKey,
 } from "../contract/index.ts";
 import { isLastUsedStale, settleUnlessAborted } from "../core/index.ts";
 
+/** Whether two owners are the same owner: the same kind and the same id, since a person and a system principal with the same id are different owners. */
+function isSameOwner(a: Readonly<ApiKeyOwner>, b: Readonly<ApiKeyOwner>) {
+  return a.kind === b.kind && a.id === b.id;
+}
+
 /**
- * An {@link ApiKeyStore} held in memory, for tests of code that uses the service. It keeps every guarantee the port states (unique hashes, unique names per owner, the conditional last-used write, abort signals honoured before any change), so a test against it exercises the same outcomes a database-backed store gives. Records are copied in and out, so a caller mutating a result cannot change what is stored.
+ * An {@link ApiKeyStore} held in memory, for tests of code that uses the service. It keeps every guarantee the port states (unique hashes, unique names per owner and kind of owner, the conditional last-used write, abort signals honoured before any change), so a test against it exercises the same outcomes a database-backed store gives. Records are copied in and out, so a caller mutating a result cannot change what is stored.
  */
 export function createInMemoryApiKeyStore(): ApiKeyStore {
   const keys = new Map<string, StoredApiKey>();
@@ -20,7 +26,8 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
         if (
           stored.some(
             (existing) =>
-              existing.ownerId === key.ownerId && existing.name === key.name,
+              isSameOwner(existing.owner, key.owner) &&
+              existing.name === key.name,
           )
         ) {
           return { outcome: "name-taken" };
@@ -51,10 +58,10 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
       });
     },
 
-    async listByOwner(ownerId, options) {
+    async listByOwner(owner, options) {
       return settleUnlessAborted(options, () =>
         [...keys.values()]
-          .filter((key) => key.ownerId === ownerId)
+          .filter((key) => isSameOwner(key.owner, owner))
           .map((key) => structuredClone(key)),
       );
     },
@@ -64,7 +71,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
         const key = keys.get(target.id);
         if (
           key === undefined ||
-          (target.ownerId !== undefined && key.ownerId !== target.ownerId)
+          (target.owner !== undefined && !isSameOwner(key.owner, target.owner))
         ) {
           return { outcome: "not-found" };
         }
@@ -74,10 +81,10 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
       });
     },
 
-    async deleteByOwner(ownerId, options) {
+    async deleteByOwner(owner, options) {
       return settleUnlessAborted(options, () => {
-        const owned = [...keys.values()].filter(
-          (key) => key.ownerId === ownerId,
+        const owned = [...keys.values()].filter((key) =>
+          isSameOwner(key.owner, owner),
         );
         for (const key of owned) keys.delete(key.id);
 

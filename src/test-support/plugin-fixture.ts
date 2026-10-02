@@ -12,6 +12,9 @@ import {
   testScopesSchema,
 } from "./service-fixture.ts";
 
+/** The pepper every test plugin hashes with; test-only. */
+export const TEST_PEPPER = "test pepper";
+
 /** The seed every test plugin's random source starts from, so a failing run replays exactly. */
 const PLUGIN_RANDOM_SEED = 7;
 
@@ -21,7 +24,7 @@ export function testPluginOptions(schema?: ApiKeySchemaOverrides) {
     prefix: TEST_PREFIX,
     maxLifetimeMs: TEST_MAX_LIFETIME_MS,
     lastUsedIntervalMs: TEST_LAST_USED_INTERVAL_MS,
-    hasher: createWebCryptoKeyHasher("test pepper"),
+    hasher: createWebCryptoKeyHasher(TEST_PEPPER),
     random: seededRandomSource(PLUGIN_RANDOM_SEED),
     clock: createManualClock(TEST_START),
     scopes: testScopesSchema,

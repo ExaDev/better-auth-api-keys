@@ -9,7 +9,11 @@ import {
   type TestPlugin,
 } from "../test-support/plugin-fixture.ts";
 import { DAY_MS } from "../test-support/service-fixture.ts";
-import { describeApiKeyStoreContract } from "../test-support/store-contract.ts";
+import {
+  describeApiKeyStoreContract,
+  system,
+  user,
+} from "../test-support/store-contract.ts";
 import {
   createAdapterApiKeyStore,
   type ApiKeyDatabaseAdapter,
@@ -144,14 +148,139 @@ describe("the apiKeys plugin", () => {
   });
 });
 
+describe("the adapter store's owner invariant", () => {
+  /** A row in the model's shape, owned as `owner` says, written straight through the adapter as a broken database or a hand-written migration could. */
+  async function insertRow(
+    adapter: Readonly<ApiKeyDatabaseAdapter>,
+    owner: Readonly<{
+      ownerKind: string;
+      ownerId: string;
+      userId: string | null;
+    }>,
+  ): Promise<string> {
+    const keyHash = `hash-${owner.ownerKind}-${owner.ownerId}-${owner.userId}`;
+    await adapter.create({
+      model: API_KEY_MODEL,
+      data: {
+        id: keyHash,
+        ...owner,
+        name: keyHash,
+        keyHash,
+        start: "test_abcd",
+        scopes: { access: "read" },
+        claims: { provider: "google" },
+        createdAt: new Date(0),
+        expiresAt: new Date(0),
+        lastUsedAt: null,
+      },
+      forceAllowId: true,
+    });
+
+    return keyHash;
+  }
+
+  it.each([
+    [
+      "a person's key referencing no one",
+      { ownerKind: "user", ownerId: "alice", userId: null },
+      user("alice"),
+    ],
+    [
+      "a person's key referencing someone else",
+      { ownerKind: "user", ownerId: "alice", userId: "bob" },
+      user("alice"),
+    ],
+    [
+      "a principal's key referencing a person",
+      { ownerKind: "system", ownerId: "alice", userId: "alice" },
+      system("alice"),
+    ],
+    // No owner can be named with an unknown kind, so such a row is only ever found by its hash.
+    [
+      "a key of an unknown kind",
+      { ownerKind: "robot", ownerId: "alice", userId: null },
+      undefined,
+    ],
+  ])("refuses to read %s", async (_, row, listedBy) => {
+    const context = await authWith({ plugins: [testPlugin()] }).$context;
+    const store = createAdapterApiKeyStore(() => context.adapter);
+    const keyHash = await insertRow(context.adapter, row);
+    await expect(store.findByHash(keyHash)).rejects.toThrow(
+      "must be a person's key referencing that person",
+    );
+    if (listedBy !== undefined) {
+      await expect(store.listByOwner(listedBy)).rejects.toThrow(
+        "must be a person's key referencing that person",
+      );
+    }
+  });
+
+  it("reads a consistent row of either kind", async () => {
+    const context = await authWith({ plugins: [testPlugin()] }).$context;
+    const store = createAdapterApiKeyStore(() => context.adapter);
+    const persons = await insertRow(context.adapter, {
+      ownerKind: "user",
+      ownerId: "alice",
+      userId: "alice",
+    });
+    const principals = await insertRow(context.adapter, {
+      ownerKind: "system",
+      ownerId: "alice",
+      userId: null,
+    });
+    expect(await store.findByHash(persons)).toMatchObject({
+      outcome: "found",
+      key: { owner: user("alice") },
+    });
+    expect(await store.findByHash(principals)).toMatchObject({
+      outcome: "found",
+      key: { owner: system("alice") },
+    });
+  });
+
+  it("writes a principal's key with no user reference, and a person's with one matching its owner", async () => {
+    const plugin = testPlugin();
+    const context = await authWith({ plugins: [plugin] }).$context;
+    await addUser(context.adapter, "alice");
+    const service = apiKeysOf(context, plugin);
+    const principals = await service.create({
+      ...createInput,
+      owner: { kind: "system", id: "alice" },
+    });
+    const persons = await service.create(createInput);
+    if (principals.outcome !== "created" || persons.outcome !== "created") {
+      throw new Error("not created");
+    }
+    const rows = await context.adapter.findMany({ model: API_KEY_MODEL });
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: principals.key.id,
+          ownerKind: "system",
+          ownerId: "alice",
+          userId: null,
+        }),
+        expect.objectContaining({
+          id: persons.key.id,
+          ownerKind: "user",
+          ownerId: "alice",
+          userId: "alice",
+        }),
+      ]),
+    );
+  });
+});
+
 describe("apiKeySchema", () => {
-  it("declares the apiKey model with a unique hash, a unique name per owner and an unindexed last-used time", () => {
+  it("declares the apiKey model with a unique hash, a unique name per owner, a user reference only a person's key sets, and an unindexed last-used time", () => {
     expect(apiKeySchema()).toEqual({
       apiKey: {
         fields: {
+          ownerKind: { type: "string", required: true },
+          ownerId: { type: "string", required: true },
           userId: {
             type: "string",
-            required: true,
+            required: false,
             references: { model: "user", field: "id", onDelete: "cascade" },
           },
           name: { type: "string", required: true },
@@ -163,7 +292,10 @@ describe("apiKeySchema", () => {
           expiresAt: { type: "date", required: true },
           lastUsedAt: { type: "date", required: false },
         },
-        indexes: [{ fields: ["userId", "name"], unique: true }],
+        indexes: [
+          { fields: ["ownerKind", "ownerId", "name"], unique: true },
+          { fields: ["userId"] },
+        ],
       },
     });
   });

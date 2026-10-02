@@ -81,20 +81,20 @@ function spiedStore(
 
       return store.findByHash(keyHash, options);
     },
-    listByOwner: async (ownerId, options) => {
+    listByOwner: async (owner, options) => {
       note("listByOwner", options);
 
-      return store.listByOwner(ownerId, options);
+      return store.listByOwner(owner, options);
     },
     delete: async (target, options) => {
       note("delete", options);
 
       return store.delete(target, options);
     },
-    deleteByOwner: async (ownerId, options) => {
+    deleteByOwner: async (owner, options) => {
       note("deleteByOwner", options);
 
-      return store.deleteByOwner(ownerId, options);
+      return store.deleteByOwner(owner, options);
     },
     touchLastUsed: async (id, at, notSince, options) => {
       note("touchLastUsed", options);

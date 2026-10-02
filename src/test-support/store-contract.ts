@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ApiKeyStore, StoredApiKey } from "../contract/index.ts";
+import type {
+  ApiKeyOwner,
+  ApiKeyStore,
+  StoredApiKey,
+} from "../contract/index.ts";
 
-/** A store under test, plus a way to create an owner it can hold keys for (a database store needs the owner's row for its foreign key). */
+/** A store under test, plus a way to create a person it can hold keys for (a database store needs the person's row for its foreign key; a system principal needs no row). */
 export interface StoreFixture {
   readonly store: ApiKeyStore;
   readonly addOwner: (ownerId: string) => Promise<void>;
@@ -13,17 +17,27 @@ const KEYS_BEYOND_ONE_PAGE = 101;
 const createdAt = new Date("2026-01-01T00:00:00.000Z");
 const expiresAt = new Date("2026-04-01T00:00:00.000Z");
 
+/** The person `id`, as an owner. */
+export function user(id: string): ApiKeyOwner {
+  return { kind: "user", id };
+}
+
+/** The system principal `id`, as an owner. */
+export function system(id: string): ApiKeyOwner {
+  return { kind: "system", id };
+}
+
 let sequence = 0;
-/** A distinct, well-formed stored key for `ownerId`, with `overrides` applied. */
+/** A distinct, well-formed stored key for `owner` (a person's id, or any owner), with `overrides` applied. */
 export function storedKey(
-  ownerId: string,
+  owner: string | ApiKeyOwner,
   overrides: Partial<StoredApiKey> = {},
 ): StoredApiKey {
   sequence++;
 
   return {
     id: `key-${sequence}`,
-    ownerId,
+    owner: typeof owner === "string" ? user(owner) : owner,
     name: `key ${sequence}`,
     keyHash: `hash-${sequence}`,
     start: `test_${sequence}`,
@@ -85,7 +99,7 @@ export function describeApiKeyStoreContract(
       ).toEqual({
         outcome: "name-taken",
       });
-      expect(await store.listByOwner("owner-a")).toEqual([first]);
+      expect(await store.listByOwner(user("owner-a"))).toEqual([first]);
     });
 
     it("allows the same name for different owners", async () => {
@@ -103,7 +117,7 @@ export function describeApiKeyStoreContract(
       );
       await Promise.all(owned.map(async (key) => store.insert(key)));
       await store.insert(storedKey("owner-b"));
-      const listed = await store.listByOwner("owner-a");
+      const listed = await store.listByOwner(user("owner-a"));
       expect(listed.map((key) => key.id).sort()).toEqual(
         owned.map((key) => key.id).sort(),
       );
@@ -126,14 +140,18 @@ export function describeApiKeyStoreContract(
     it("deletes by id and owner only when that owner holds the key", async () => {
       const key = storedKey("owner-a");
       await store.insert(key);
-      expect(await store.delete({ id: key.id, ownerId: "owner-b" })).toEqual({
+      expect(
+        await store.delete({ id: key.id, owner: user("owner-b") }),
+      ).toEqual({
         outcome: "not-found",
       });
       expect(await store.findByHash(key.keyHash)).toEqual({
         outcome: "found",
         key,
       });
-      expect(await store.delete({ id: key.id, ownerId: "owner-a" })).toEqual({
+      expect(
+        await store.delete({ id: key.id, owner: user("owner-a") }),
+      ).toEqual({
         outcome: "deleted",
       });
     });
@@ -143,10 +161,14 @@ export function describeApiKeyStoreContract(
       await store.insert(storedKey("owner-a"));
       const other = storedKey("owner-b");
       await store.insert(other);
-      expect(await store.deleteByOwner("owner-a")).toEqual({ deleted: 2 });
-      expect(await store.listByOwner("owner-a")).toEqual([]);
-      expect(await store.listByOwner("owner-b")).toEqual([other]);
-      expect(await store.deleteByOwner("owner-a")).toEqual({ deleted: 0 });
+      expect(await store.deleteByOwner(user("owner-a"))).toEqual({
+        deleted: 2,
+      });
+      expect(await store.listByOwner(user("owner-a"))).toEqual([]);
+      expect(await store.listByOwner(user("owner-b"))).toEqual([other]);
+      expect(await store.deleteByOwner(user("owner-a"))).toEqual({
+        deleted: 0,
+      });
     });
 
     it("writes the last-used time of a never-used key", async () => {
@@ -207,26 +229,105 @@ export function describeApiKeyStoreContract(
       });
     });
 
+    it("finds a system principal's key, every field intact", async () => {
+      const key = storedKey(system("deployer"));
+      expect(await store.insert(key)).toEqual({ outcome: "inserted" });
+      expect(await store.findByHash(key.keyHash)).toEqual({
+        outcome: "found",
+        key,
+      });
+      expect(await store.listByOwner(system("deployer"))).toEqual([key]);
+    });
+
+    it("keeps names unique per owner kind, so a person and a principal with the same id may share a name", async () => {
+      const principals = storedKey(system("owner-a"), { name: "deploys" });
+      expect(await store.insert(principals)).toEqual({ outcome: "inserted" });
+      expect(
+        await store.insert(storedKey(system("owner-a"), { name: "deploys" })),
+      ).toEqual({ outcome: "name-taken" });
+      const persons = storedKey("owner-a", { name: "deploys" });
+      expect(await store.insert(persons)).toEqual({ outcome: "inserted" });
+      expect(
+        await store.insert(storedKey(system("other"), { name: "deploys" })),
+      ).toEqual({ outcome: "inserted" });
+      expect(await store.listByOwner(system("owner-a"))).toEqual([principals]);
+      expect(await store.listByOwner(user("owner-a"))).toEqual([persons]);
+    });
+
+    it("deletes by id and owner only when the owner's kind matches as well as its id", async () => {
+      const principals = storedKey(system("owner-a"));
+      const persons = storedKey("owner-a");
+      await store.insert(principals);
+      await store.insert(persons);
+      expect(
+        await store.delete({ id: principals.id, owner: user("owner-a") }),
+      ).toEqual({ outcome: "not-found" });
+      expect(
+        await store.delete({ id: persons.id, owner: system("owner-a") }),
+      ).toEqual({ outcome: "not-found" });
+      expect(
+        await store.delete({ id: principals.id, owner: system("owner-b") }),
+      ).toEqual({ outcome: "not-found" });
+      expect(await store.findByHash(principals.keyHash)).toEqual({
+        outcome: "found",
+        key: principals,
+      });
+      expect(
+        await store.delete({ id: principals.id, owner: system("owner-a") }),
+      ).toEqual({ outcome: "deleted" });
+      expect(await store.listByOwner(user("owner-a"))).toEqual([persons]);
+    });
+
+    it("deletes every key of one owner kind and no key of the other kind with the same id", async () => {
+      const principals = storedKey(system("owner-a"));
+      const persons = storedKey("owner-a");
+      await store.insert(principals);
+      await store.insert(persons);
+      expect(await store.deleteByOwner(user("owner-a"))).toEqual({
+        deleted: 1,
+      });
+      expect(await store.listByOwner(system("owner-a"))).toEqual([principals]);
+      expect(await store.deleteByOwner(system("owner-a"))).toEqual({
+        deleted: 1,
+      });
+      expect(await store.findByHash(principals.keyHash)).toEqual({
+        outcome: "not-found",
+      });
+    });
+
+    it("writes the last-used time of a system principal's key", async () => {
+      const key = storedKey(system("deployer"));
+      await store.insert(key);
+      const at = new Date("2026-02-01T12:00:00.000Z");
+      expect(
+        await store.touchLastUsed(key.id, at, new Date(at.getTime() - 1)),
+      ).toEqual({ outcome: "touched" });
+      expect(await store.findByHash(key.keyHash)).toEqual({
+        outcome: "found",
+        key: { ...key, lastUsedAt: at },
+      });
+    });
+
     it("refuses every call once its signal has aborted, changing nothing", async () => {
       const key = storedKey("owner-a");
       const signal = aborted();
       await expect(store.insert(key, { signal })).rejects.toThrow(
         "aborted by the test",
       );
-      expect(await store.listByOwner("owner-a")).toEqual([]);
+      expect(await store.listByOwner(user("owner-a"))).toEqual([]);
       await store.insert(key);
       await expect(store.findByHash(key.keyHash, { signal })).rejects.toThrow(
         "aborted",
       );
-      await expect(store.listByOwner("owner-a", { signal })).rejects.toThrow(
-        "aborted",
-      );
+      await expect(
+        store.listByOwner(user("owner-a"), { signal }),
+      ).rejects.toThrow("aborted");
       await expect(store.delete({ id: key.id }, { signal })).rejects.toThrow(
         "aborted",
       );
-      await expect(store.deleteByOwner("owner-a", { signal })).rejects.toThrow(
-        "aborted",
-      );
+      await expect(
+        store.deleteByOwner(user("owner-a"), { signal }),
+      ).rejects.toThrow("aborted");
       await expect(
         store.touchLastUsed(key.id, createdAt, createdAt, { signal }),
       ).rejects.toThrow("aborted");

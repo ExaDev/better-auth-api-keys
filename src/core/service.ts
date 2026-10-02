@@ -4,6 +4,7 @@ import {
   apiKeyOwnerSchema,
   type ApiKey,
   type ApiKeyOwner,
+  type ApiKeyOwnerInput,
   type ApiKeyStore,
   type ApiKeySummary,
   type AuthorisationDecision,
@@ -71,7 +72,7 @@ export interface ApiKeyServiceOptions<
 
 /** What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`. */
 export interface CreateApiKeyInput<Scopes, Claims> {
-  readonly owner: ApiKeyOwner;
+  readonly owner: ApiKeyOwnerInput;
   readonly name: string;
   readonly lifetimeMs: number;
   readonly scopes: Scopes;
@@ -93,7 +94,7 @@ export type CreateApiKeyResult<Scopes, Claims> =
   | { readonly outcome: "name-taken" };
 
 /**
- * The result of {@link ApiKeyService.verify}. `malformed` means the presented string failed the offline check, so nothing was hashed or read; `unknown` means no stored key matches it, or the stored key's scopes or claims no longer pass the host's schemas; `expired` names the key, its owner and when it was created, so the host can say which key it was and still apply its own refusals that outrank expiry (a disabled owner, or a key older than the owner's last sign-out everywhere).
+ * The result of {@link ApiKeyService.verify}. `malformed` means the presented string failed the offline check, so nothing was hashed or read; `unknown` means no stored key matches it, or the stored key's scopes or claims no longer pass the host's schemas; `expired` names the key, its owner and when it was created, so the host can say which key it was and still apply its own refusals that outrank expiry (a disabled owner, or a key older than the owner's last sign-out everywhere). In both `valid` and `expired`, `owner.kind` tells a person's key from a system principal's, and narrows `owner` to that kind.
  */
 export type VerifyApiKeyResult<Scopes, Claims> =
   | { readonly outcome: "valid"; readonly key: ApiKey<Scopes, Claims> }
@@ -102,6 +103,8 @@ export type VerifyApiKeyResult<Scopes, Claims> =
   | {
       readonly outcome: "expired";
       readonly id: string;
+      readonly owner: ApiKeyOwner;
+      /** Repeats `owner.id`, as {@link ApiKeySummary.ownerId} does. */
       readonly ownerId: string;
       readonly createdAt: Date;
     };
@@ -128,24 +131,27 @@ export type RevokeApiKeyResult =
 
 /** Creates, lists, revokes, verifies and authorises API keys against the injected ports. */
 export interface ApiKeyService<Scopes, Claims, Request> {
-  /** Creates a key for `input.owner`. Refuses invalid input and a name the owner already uses; never overwrites a key. */
+  /** Creates a key for `input.owner`. Refuses invalid input and a name the owner (the same kind and id) already uses; never overwrites a key. */
   create: (
     input: CreateApiKeyInput<Scopes, Claims>,
     options?: PortCallOptions,
   ) => Promise<CreateApiKeyResult<Scopes, Claims>>;
-  /** Every key `owner` holds, newest first. */
+  /** Every key `owner` holds, newest first. Throws if `owner` is not an owner {@link apiKeyOwnerSchema} accepts. */
   list: (
-    owner: Readonly<ApiKeyOwner>,
+    owner: Readonly<ApiKeyOwnerInput>,
     options?: PortCallOptions,
   ) => Promise<readonly ListedApiKey<Scopes, Claims>[]>;
-  /** Deletes the key `id`; when `owner` is given, only if that owner holds it. */
+  /** Deletes the key `id`; when `owner` is given, only if that owner (the same kind and id) holds it. Throws if `owner` is given and is not an owner {@link apiKeyOwnerSchema} accepts. */
   revoke: (
-    target: { readonly id: string; readonly owner?: ApiKeyOwner | undefined },
+    target: {
+      readonly id: string;
+      readonly owner?: ApiKeyOwnerInput | undefined;
+    },
     options?: PortCallOptions,
   ) => Promise<RevokeApiKeyResult>;
-  /** Deletes every key `owner` holds, for "sign out everywhere", disabling and deleting a person. */
+  /** Deletes every key `owner` holds, for "sign out everywhere", disabling and deleting a person, and deleting a system principal: nothing references a principal, so its keys outlive it unless the host calls this when it removes one. Throws if `owner` is not an owner {@link apiKeyOwnerSchema} accepts. */
   revokeAllForOwner: (
-    owner: Readonly<ApiKeyOwner>,
+    owner: Readonly<ApiKeyOwnerInput>,
     options?: PortCallOptions,
   ) => Promise<{ readonly revoked: number }>;
   /**
@@ -173,13 +179,19 @@ export interface ApiKeyService<Scopes, Claims, Request> {
 function summaryOf(stored: StoredApiKey): ApiKeySummary {
   return {
     id: stored.id,
-    ownerId: stored.ownerId,
+    owner: stored.owner,
+    ownerId: stored.owner.id,
     name: stored.name,
     start: stored.start,
     createdAt: stored.createdAt,
     expiresAt: stored.expiresAt,
     lastUsedAt: stored.lastUsedAt,
   };
+}
+
+/** The owner a caller named, as the store records it. Throws on anything {@link apiKeyOwnerSchema} refuses, so a misspelt kind can never be read as a person. */
+function ownerOf(owner: Readonly<ApiKeyOwnerInput>): ApiKeyOwner {
+  return z.parse(apiKeyOwnerSchema, owner);
 }
 
 /**
@@ -231,7 +243,7 @@ export function createApiKeyService<
       const plaintext = await generateKey(prefix, random, callOptions);
       const stored: StoredApiKey = {
         id: await randomBase62(KEY_ID_LENGTH, random, callOptions),
-        ownerId: owner.data.id,
+        owner: owner.data,
         name: name.data,
         keyHash: await hasher.hash(plaintext, callOptions),
         start: keyStart(prefix, plaintext),
@@ -253,7 +265,7 @@ export function createApiKeyService<
 
     async list(owner, callOptions) {
       callOptions?.signal?.throwIfAborted();
-      const stored = await store.listByOwner(owner.id, callOptions);
+      const stored = await store.listByOwner(ownerOf(owner), callOptions);
 
       return [...stored]
         .sort(
@@ -273,7 +285,10 @@ export function createApiKeyService<
     async revoke(target, callOptions) {
       callOptions?.signal?.throwIfAborted();
       const deleted = await store.delete(
-        { id: target.id, ownerId: target.owner?.id },
+        {
+          id: target.id,
+          owner: target.owner === undefined ? undefined : ownerOf(target.owner),
+        },
         callOptions,
       );
 
@@ -284,7 +299,10 @@ export function createApiKeyService<
 
     async revokeAllForOwner(owner, callOptions) {
       callOptions?.signal?.throwIfAborted();
-      const { deleted } = await store.deleteByOwner(owner.id, callOptions);
+      const { deleted } = await store.deleteByOwner(
+        ownerOf(owner),
+        callOptions,
+      );
 
       return { revoked: deleted };
     },
@@ -305,6 +323,7 @@ export function createApiKeyService<
         return {
           outcome: "expired",
           id: key.id,
+          owner: key.owner,
           ownerId: key.ownerId,
           createdAt: key.createdAt,
         };
