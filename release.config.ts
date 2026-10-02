@@ -23,6 +23,7 @@ const config: Options = {
     ],
     [
       "@semantic-release/release-notes-generator",
+      // The preset package stays on major 9 while this plugin depends on conventional-changelog-writer 8: preset 10 renders only with writer 9 or later, and with writer 8 its template is a deliberate "Missing helper" error.
       {
         preset: "conventionalcommits",
         presetConfig: {
