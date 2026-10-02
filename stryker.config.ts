@@ -1,7 +1,7 @@
 import type { PartialStrykerOptions } from "@stryker-mutator/api/core";
 
-/** Derived by the rule below from the run it was set from: a score of 88.67 floors to 88, and 12 timeouts among 309 valid mutants are a 3.88-point share, which rounds up to a margin of 4. */
-const MUTATION_BREAK_THRESHOLD = 84;
+/** Derived by the rule below from the mutation workflow run it was set from: a score of 88.67 floors to 88, and 14 timeouts among 309 valid mutants are a 4.53-point share, which rounds up to a margin of 5. */
+const MUTATION_BREAK_THRESHOLD = 83;
 
 // Deliberately no `incremental`/`incrementalFile`: @stryker-mutator/vitest-runner reports no test-location support, so per StrykerJS's documented incremental-mode limitations Stryker cannot notice that a test file changed, and would reuse a stale cached verdict for every mutant that test used to cover.
 const config: PartialStrykerOptions = {
