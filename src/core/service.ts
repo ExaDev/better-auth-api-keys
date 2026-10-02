@@ -34,7 +34,7 @@ export type JsonObjectSchema = z.core.$ZodType<
 
 /** The settings that shape keys and their lifecycle, validated by {@link apiKeyServiceConfigSchema}. */
 export const apiKeyServiceConfigSchema = z.object({
-  /** Starts every key, so a leaked key is recognisable (`exshow_` in this repository). */
+  /** Starts every key, so a leaked key is recognisable: a short, distinctive string the host chooses, such as `exshow_`. */
   prefix: z.string().check(z.regex(KEY_PREFIX_PATTERN)),
   /** The longest lifetime a key may be created with. Every key expires. */
   maxLifetimeMs: z.number().check(z.int(), z.positive()),
