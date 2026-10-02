@@ -8,18 +8,6 @@ pnpm add @exadev/better-auth-api-keys zod better-auth @better-auth/core
 
 The peer ranges are `zod` `^4.0.0` and `better-auth` and `@better-auth/core` `^1.7.5`. CI runs the tests against the lowest and the newest version each range admits.
 
-## Upgrading from 0.1.0
-
-0.2.0 is a minor version only because the package is below 1.0; it breaks hosts and custom stores. In order:
-
-1. **Migrate the database first, then deploy.** The `apiKey` table gains `ownerKind`, `ownerId` and `createdBy`, and `userId` and `expiresAt` become nullable. On SQLite and D1 that is a table rebuild that must run as one transaction, after deleting any keys whose person is gone: see [Migrating the database from 0.1.0](https://github.com/ExaDev/better-auth-api-keys#migrating-the-database-from-010). Code on 0.2.0 against the old table fails every read and write; code on 0.1.0 against the new table cannot create keys.
-2. **Name the kind of every owner.** `create`, `list`, `revoke` and `revokeAllForOwner` refuse 0.1.0's `{ id }`: a person is `{ kind: "user", id }`, a system principal `{ kind: "system", id }`. `apiKeyOwnerSchema` and `ApiKeyOwner` are now that discriminated union.
-3. **Read the owner as `owner`, after checking its kind.** Keys (from `create`, `verify` and `list`) and `verify`'s `expired` result have `owner` instead of `ownerId`. Replace each `ownerId` with `owner.id`, and look the owner up in the people table only when `owner.kind` is `"user"`: a principal's id may equal a person's.
-4. **Handle a key with no expiry.** `expiresAt` is `Date | null` (null only for a system principal's key the host allowed with `allowNonExpiringSystemKeys`), and `create`'s `lifetimeMs` accepts `null`.
-5. **Handle `list`'s new `corrupt` status.** An entry is `valid`, `unreadable` or `corrupt`; a `corrupt` entry has `id` and `owner` but no `key`, so an exhaustive `switch` on `status` needs a case for it, and code must check `status` before reading `entry.key`.
-6. **Handle `create`'s new invalid field.** `create` can refuse `createdBy` (empty, or over `API_KEY_CREATED_BY_MAX_LENGTH`), so an exhaustive `switch` on an `invalid` result's `field` needs a `"createdBy"` case.
-7. **Custom stores only.** `ApiKeyStore` takes an owner (`{ kind, id }`) where it took an owner id in `listByOwner`, `delete` and `deleteByOwner`; stored keys carry `owner`, an optional `createdBy` and a nullable `expiresAt`; and `listByOwner` returns listings, `{ outcome: "stored", key }` or `{ outcome: "corrupt", id }`. `API_KEYS_CONTRACT_VERSION` is 2, so a store written for 1 stops type-checking.
-
 ## Security model
 
 A key is a prefix the host chooses (`exshow_` in the examples here) followed by 43 base62 characters and a 6-character base62 checksum.
@@ -101,20 +89,14 @@ if (result.outcome === "valid" /* and the host's own checks accept it */) {
 }
 ```
 
+## Database schema
+
 The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"` or `"system"`) and `ownerId`; a nullable `userId` referencing `user.id` with cascading delete, set (to `ownerId`) only for a person's key, and indexed for that delete; `name`; `keyHash` unique; `start`; `scopes` and `claims` as JSON; `createdAt`; a nullable `expiresAt` (null only for a system key with no expiry); a nullable plain-text `createdBy`; and an unindexed nullable `lastUsedAt`; with `(ownerKind, ownerId, name)` unique. The owner is two required columns rather than a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a nullable column (SQL Server and MongoDB treat nulls in a unique index as equal), and a name must be unique per owner. Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
 
-better-auth's schema cannot express a check across columns, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` does not agree with its owner (verifying such a key throws; listing its owner's keys reports it as `corrupt`, by id, beside the rest, so it can be revoked without hiding the others), and the service refuses a person's key with no expiry whatever the database holds. A host's own migration should add the same rule as a check constraint, as the SQLite one below does.
-
-### Migrating the database from 0.1.0
-
-0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none). better-auth's schema check will not tell you it is missing: with the Drizzle adapter it compares the plugin's schema with the host's Drizzle declaration, not with the database, so it catches a declaration left on 0.1.0 but not a migration that never ran. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's.
-
-Run the migration before deploying code on 0.2.0. Code on 0.1.0 against the migrated table still verifies people's keys but cannot create any, since it writes no owner columns; code on 0.2.0 against the old table fails every read and write. So the order is: migrate, then deploy.
-
-The rebuild drops the old table, so its statements must succeed or fail together: run separately, a failed copy is followed by the drop and every key is lost. On D1, put them in one migration file, as below: `wrangler d1 migrations apply` rolls a migration file back if any of its statements fails. With the column names from the Drizzle example (`user_id`, `key_hash` and so on; adjust them to your own):
+The package ships no migrations: create the table with your own migration tool. On D1 or SQLite, with the column names the Drizzle declaration below uses (adjust them to your own):
 
 ```sql
-CREATE TABLE api_key_new (
+CREATE TABLE api_key (
   id text PRIMARY KEY,
   owner_kind text NOT NULL,
   owner_id text NOT NULL,
@@ -133,58 +115,15 @@ CREATE TABLE api_key_new (
     OR (owner_kind = 'system' AND user_id IS NULL)
   )
 );
-INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at)
-  SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key;
-DROP TABLE api_key;
-ALTER TABLE api_key_new RENAME TO api_key;
 CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
 CREATE INDEX api_key_user_id ON api_key (user_id);
 ```
 
-On plain SQLite, run the same statements in one transaction, with foreign keys enforced (D1 refuses `BEGIN`, which is why its file has none, and always enforces foreign keys; SQLite leaves them off on each new connection and ignores the pragma inside a transaction, so it comes first):
+The `api_key_owner` check is the rule better-auth's schema cannot express, since it spans columns: a person's key names the same person in `user_id` and `owner_id` and always expires, and a system principal's key has no `user_id`. The adapter-backed store always writes a row that passes it and refuses to read one whose `userId` does not agree with its owner (verifying such a key throws; listing its owner's keys reports it as `corrupt`, by id, beside the rest, so it can be revoked without hiding the others), and the service refuses a person's key with no expiry whatever the database holds; the check makes the database refuse such a row as well. Deleting a person deletes their keys only where foreign keys are enforced: D1 always enforces them, and plain SQLite only on a connection that has run `PRAGMA foreign_keys = ON`. The Workers tests create their table from this block of the README.
 
-```sql
-PRAGMA foreign_keys = ON;
-BEGIN;
-CREATE TABLE api_key_new (
-  id text PRIMARY KEY,
-  owner_kind text NOT NULL,
-  owner_id text NOT NULL,
-  user_id text REFERENCES user(id) ON DELETE CASCADE,
-  name text NOT NULL,
-  key_hash text NOT NULL UNIQUE,
-  start text NOT NULL,
-  scopes text NOT NULL,
-  claims text NOT NULL,
-  created_at integer NOT NULL,
-  expires_at integer,
-  created_by text,
-  last_used_at integer,
-  CONSTRAINT api_key_owner CHECK (
-    (owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL)
-    OR (owner_kind = 'system' AND user_id IS NULL)
-  )
-);
-INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at)
-  SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key;
-DROP TABLE api_key;
-ALTER TABLE api_key_new RENAME TO api_key;
-CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
-CREATE INDEX api_key_user_id ON api_key (user_id);
-COMMIT;
-```
+better-auth's schema check will not tell you the table is missing or out of date: with the Drizzle adapter it compares the plugin's schema with your Drizzle declaration, not with the database, so it catches a stale declaration but not a migration that never ran. A release that changes the table says so in its release notes; run its migration before deploying code on that release.
 
-A database that once ran without foreign-key enforcement may hold keys whose person no longer exists. When foreign keys are enforced (always on D1; on plain SQLite once `PRAGMA foreign_keys = ON` has run before `BEGIN`), the copy fails on them and the whole migration rolls back, changing nothing; on plain SQLite without the pragma, the copy keeps them silently. Either way, delete them before migrating:
-
-```sql
-DELETE FROM api_key WHERE user_id NOT IN (SELECT id FROM user);
-```
-
-On 0.1.0's table this deletes only keys whose person is gone: every key has a `user_id`, and `user.id` is never null, so `NOT IN` matches exactly the orphans.
-
-Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), `created_by`, make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
-
-The Drizzle declaration matching the migration:
+The same table declared for Drizzle:
 
 ```ts
 export const apiKey = sqliteTable(

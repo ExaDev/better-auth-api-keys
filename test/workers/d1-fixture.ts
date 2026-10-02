@@ -16,7 +16,8 @@ import {
   TEST_BASE_URL,
   type TestPlugin,
 } from "../../src/test-support/plugin-fixture.ts";
-import { readmeMigration, statementsOf } from "./readme-migration.ts";
+import { readmeSchemaSql, statementsOf } from "./readme-schema.ts";
+import { V0_1_0_TO_V0_2_0_D1_MIGRATION } from "./v0.1.0-migration.ts";
 
 const timestamp = (name: string) => integer(name, { mode: "timestamp_ms" });
 
@@ -90,7 +91,7 @@ const verification = sqliteTable("verification", {
 });
 
 /**
- * The plugin's `apiKey` model as a host would declare it in Drizzle, with the check the README recommends: `userId` agrees with the owner, and a person's key always expires. `scopes` and `claims` are plain `text()`, not `text({ mode: "json" })`: better-auth's SQLite adapter already serialises `json` fields to a string, so a JSON-mode column would encode them twice.
+ * The plugin's `apiKey` model as a host would declare it in Drizzle, as the README declares it, with the check the README's SQL adds: `userId` agrees with the owner, and a person's key always expires. `scopes` and `claims` are plain `text()`, not `text({ mode: "json" })`: better-auth's SQLite adapter already serialises `json` fields to a string, so a JSON-mode column would encode them twice.
  */
 const apiKey = sqliteTable(
   "api_key",
@@ -136,12 +137,10 @@ const CORE_TABLES = [
   `CREATE TABLE verification (id text PRIMARY KEY, identifier text NOT NULL, value text NOT NULL, expires_at integer NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)`,
 ];
 
-/** The `api_key` table as {@link apiKey} declares it: a name unique per owner, and `user_id` indexed for the cascading delete. */
-const API_KEY_TABLE = [
-  `CREATE TABLE api_key (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, created_by text, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
-  "CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name)",
-  "CREATE INDEX api_key_user_id ON api_key (user_id)",
-];
+/** The `api_key` table as the README tells a host to create it in a new database, read from the README itself, so every test that resets the database runs against exactly that table; {@link apiKey} declares the same table for Drizzle. */
+function apiKeyTable(): string[] {
+  return statementsOf(readmeSchemaSql());
+}
 
 /** The `api_key` table as version 0.1.0 of the package declared it: every key a person's, and every key expiring. `foreignKeys: false` leaves out the reference to `user`, as a database built without foreign-key enforcement would behave, so a key can outlive its person. */
 function v0_1_0ApiKeyTable(foreignKeys: boolean): string[] {
@@ -168,9 +167,9 @@ export async function resetToV0_1_0(
   await run([...CORE_TABLES, ...v0_1_0ApiKeyTable(options.foreignKeys)]);
 }
 
-/** Runs the README's D1 migration file from 0.1.0, read from the README itself, as one batch, which D1 applies as one transaction as `wrangler d1 migrations apply` does a migration file. */
+/** Runs the D1 migration file from 0.1.0 to 0.2.0 as one batch, which D1 applies as one transaction as `wrangler d1 migrations apply` does a migration file. */
 export async function migrateFromV0_1_0(): Promise<void> {
-  await run(statementsOf(readmeMigration().d1));
+  await run(statementsOf(V0_1_0_TO_V0_2_0_D1_MIGRATION));
 }
 
 /**
@@ -199,7 +198,7 @@ export async function describeApiKeyTable(): Promise<{
 
 /** Recreates the tables, empty. */
 export async function resetDatabase(): Promise<void> {
-  await run([...CORE_TABLES, ...API_KEY_TABLE]);
+  await run([...CORE_TABLES, ...apiKeyTable()]);
 }
 
 /** A better-auth instance over the test D1 database through the Drizzle adapter, with `plugin` registered. */
