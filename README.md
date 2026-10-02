@@ -95,7 +95,11 @@ better-auth's schema cannot express a check across columns, so the adapter-backe
 
 ### Upgrading from 0.1.0
 
-0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none), and better-auth's schema check fails at start-up until it has run. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's. With the column names from the Drizzle example (`user_id`, `key_hash` and so on; adjust them to your own):
+0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none). On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's.
+
+Run the migration before deploying code on 0.2.0. Code on 0.1.0 against the migrated table still verifies people's keys but cannot create any, since it writes no owner columns; code on 0.2.0 against the old table fails every read and write. So the order is: migrate, then deploy.
+
+The rebuild drops the old table, so its statements must succeed or fail together: run separately, a failed copy is followed by the drop and every key is lost. On D1, put them in one migration file, as below: `wrangler d1 migrations apply` rolls a migration file back if any of its statements fails. With the column names from the Drizzle example (`user_id`, `key_hash` and so on; adjust them to your own):
 
 ```sql
 CREATE TABLE api_key_new (
@@ -125,7 +129,39 @@ CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
 CREATE INDEX api_key_user_id ON api_key (user_id);
 ```
 
-Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), `created_by`, make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
+On plain SQLite, run the same statements in one transaction (D1 refuses `BEGIN`, which is why its file has none):
+
+```sql
+BEGIN;
+CREATE TABLE api_key_new (
+  id text PRIMARY KEY,
+  owner_kind text NOT NULL,
+  owner_id text NOT NULL,
+  user_id text REFERENCES user(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  key_hash text NOT NULL UNIQUE,
+  start text NOT NULL,
+  scopes text NOT NULL,
+  claims text NOT NULL,
+  created_at integer NOT NULL,
+  expires_at integer,
+  created_by text,
+  last_used_at integer,
+  CONSTRAINT api_key_owner CHECK (
+    (owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL)
+    OR (owner_kind = 'system' AND user_id IS NULL)
+  )
+);
+INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at)
+  SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key;
+DROP TABLE api_key;
+ALTER TABLE api_key_new RENAME TO api_key;
+CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
+CREATE INDEX api_key_user_id ON api_key (user_id);
+COMMIT;
+```
+
+Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. A database that once ran without foreign-key enforcement may hold keys whose person no longer exists; the copy fails on them, rolling the whole migration back, so delete them first (`DELETE FROM api_key WHERE user_id NOT IN (SELECT id FROM user);`). The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), `created_by`, make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
 
 The Drizzle declaration matching the migration:
 
