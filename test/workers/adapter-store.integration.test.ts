@@ -127,7 +127,7 @@ describe("the plugin on D1", () => {
     } as const;
     const persons = await service.create({
       ...common,
-      owner: { id: "alice" },
+      owner: { kind: "user", id: "alice" },
       name: "laptop",
       lifetimeMs: LIFETIME_MS,
     });
@@ -159,7 +159,7 @@ describe("the plugin on D1", () => {
     expect(await service.verify(persons.plaintext)).toEqual({
       outcome: "unknown",
     });
-    expect(await service.list({ id: "alice" })).toEqual([]);
+    expect(await service.list({ kind: "user", id: "alice" })).toEqual([]);
     expect(await service.verify(principals.plaintext)).toEqual({
       outcome: "valid",
       key: principals.key,
@@ -203,7 +203,7 @@ describe("the plugin on D1", () => {
     const context = await d1Auth(plugin).$context;
     const service = apiKeysOf(context, plugin);
     const created = await service.create({
-      owner: { id: "alice" },
+      owner: { kind: "user", id: "alice" },
       name: "deploys",
       lifetimeMs: LIFETIME_MS,
       scopes: { access: "read" },
@@ -236,7 +236,10 @@ describe("the plugin on D1", () => {
     expect(deferred).toEqual([]);
 
     expect(
-      await service.revoke({ id: created.key.id, owner: { id: "alice" } }),
+      await service.revoke({
+        id: created.key.id,
+        owner: { kind: "user", id: "alice" },
+      }),
     ).toEqual({
       outcome: "revoked",
     });
@@ -285,9 +288,12 @@ describe("the plugin on D1", () => {
         key: { ...created.key, lastUsedAt: created.key.createdAt },
       },
     ]);
-    expect(await service.list({ id: "deployer" })).toEqual([]);
+    expect(await service.list({ kind: "user", id: "deployer" })).toEqual([]);
     expect(
-      await service.revoke({ id: created.key.id, owner: { id: "deployer" } }),
+      await service.revoke({
+        id: created.key.id,
+        owner: { kind: "user", id: "deployer" },
+      }),
     ).toEqual({ outcome: "not-found" });
     expect(await service.revokeAllForOwner(deployer)).toEqual({ revoked: 1 });
     expect(await service.verify(created.plaintext)).toEqual({

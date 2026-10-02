@@ -36,8 +36,8 @@ const INTERVALS_OBSERVED = 3;
 /** The id length 128 bits of entropy needs in base62. */
 const KEY_ID_LENGTH = 22;
 
-const alice = { id: "alice" };
-const bob = { id: "bob" };
+const alice = { kind: "user", id: "alice" } as const;
+const bob = { kind: "user", id: "bob" } as const;
 const deployer = { kind: "system", id: "deployer" } as const;
 /** A system principal whose id is the same string as the person `alice`'s. */
 const aliceSystem = { kind: "system", id: "alice" } as const;
@@ -142,7 +142,7 @@ describe("ApiKeyService.create", () => {
   });
 
   it.each([
-    ["an empty owner id", input({ owner: { id: "" } }), "owner"],
+    ["an empty owner id", input({ owner: { kind: "user", id: "" } }), "owner"],
     ["an empty name", input({ name: "" }), "name"],
     ["a name with surrounding whitespace", input({ name: " deploys" }), "name"],
     [
@@ -577,15 +577,6 @@ describe("system principals' keys", () => {
     expect(verified).toEqual({ outcome: "valid", key: created.key });
   });
 
-  it("reads an owner named without a kind as a person, exactly as before system principals existed", async () => {
-    const { service } = serviceFixture();
-    const created = await service.create(input({ owner: { id: "alice" } }));
-    if (created.outcome !== "created") throw new Error(created.outcome);
-    expect(created.key.owner).toEqual({ kind: "user", id: "alice" });
-    expect(await service.list({ kind: "user", id: "alice" })).toHaveLength(1);
-    expect(await service.list(aliceSystem)).toEqual([]);
-  });
-
   it("distinguishes the owner's kind in the verify result's type, without a cast", async () => {
     const { service } = serviceFixture();
     const created = await service.create(input({ owner: deployer }));
@@ -608,19 +599,39 @@ describe("system principals' keys", () => {
       { kind: "robot", id: "x" },
     ],
     ["a misspelt kind", { kind: "System", id: "deployer" }],
-  ])("refuses %s, and never reads it as a person", async (_, owner) => {
-    const { service, store } = serviceFixture();
-    expect(
-      // @ts-expect-error an owner the schema refuses, as an untyped caller could pass
-      await service.create(input({ owner })),
-    ).toEqual({ outcome: "invalid", field: "owner" });
-    expect(await store.listByOwner(user(owner.id))).toEqual([]);
-    // @ts-expect-error as above
-    await expect(service.list(owner)).rejects.toThrow();
-    // @ts-expect-error as above
-    await expect(service.revoke({ id: "any", owner })).rejects.toThrow();
-    // @ts-expect-error as above
-    await expect(service.revokeAllForOwner(owner)).rejects.toThrow();
+    ["an owner with no kind", { id: "alice" }],
+  ])(
+    "refuses %s on every method, and never reads it as a person",
+    async (_, owner) => {
+      const { service, store } = serviceFixture();
+      expect(
+        // @ts-expect-error an owner the schema refuses, as an untyped caller could pass
+        await service.create(input({ owner })),
+      ).toEqual({ outcome: "invalid", field: "owner" });
+      expect(await store.listByOwner(user(owner.id))).toEqual([]);
+      expect(await store.listByOwner(system(owner.id))).toEqual([]);
+      // @ts-expect-error as above
+      await expect(service.list(owner)).rejects.toThrow();
+      // @ts-expect-error as above
+      await expect(service.revoke({ id: "any", owner })).rejects.toThrow();
+      // @ts-expect-error as above
+      await expect(service.revokeAllForOwner(owner)).rejects.toThrow();
+    },
+  );
+
+  it("never revokes a person's keys for a principal named without a kind", async () => {
+    const { service } = serviceFixture();
+    const persons = await service.create(input({ owner: alice }));
+    const principals = await service.create(input({ owner: aliceSystem }));
+    if (persons.outcome !== "created" || principals.outcome !== "created") {
+      throw new Error("not created");
+    }
+    await expect(
+      // @ts-expect-error a principal named without its kind
+      service.revokeAllForOwner({ id: aliceSystem.id }),
+    ).rejects.toThrow();
+    expect((await service.verify(persons.plaintext)).outcome).toBe("valid");
+    expect((await service.verify(principals.plaintext)).outcome).toBe("valid");
   });
 
   it("refuses an empty creator", async () => {

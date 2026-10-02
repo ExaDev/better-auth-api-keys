@@ -4,7 +4,6 @@ import {
   apiKeyOwnerSchema,
   type ApiKey,
   type ApiKeyOwner,
-  type ApiKeyOwnerInput,
   type ApiKeyStore,
   type ApiKeySummary,
   type AuthorisationDecision,
@@ -76,7 +75,7 @@ export interface ApiKeyServiceOptions<
  * What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`; `null` creates a key that never expires, which is refused unless the owner is a system principal and the service's `allowNonExpiringSystemKeys` is on. `createdBy` names who created the key, as plain text the package stores and never resolves.
  */
 export interface CreateApiKeyInput<Scopes, Claims> {
-  readonly owner: ApiKeyOwnerInput;
+  readonly owner: ApiKeyOwner;
   readonly name: string;
   readonly lifetimeMs: number | null;
   readonly scopes: Scopes;
@@ -143,20 +142,20 @@ export interface ApiKeyService<Scopes, Claims, Request> {
   ) => Promise<CreateApiKeyResult<Scopes, Claims>>;
   /** Every key `owner` holds, newest first. Throws if `owner` is not an owner {@link apiKeyOwnerSchema} accepts. */
   list: (
-    owner: Readonly<ApiKeyOwnerInput>,
+    owner: Readonly<ApiKeyOwner>,
     options?: PortCallOptions,
   ) => Promise<readonly ListedApiKey<Scopes, Claims>[]>;
   /** Deletes the key `id`; when `owner` is given, only if that owner (the same kind and id) holds it. Throws if `owner` is given and is not an owner {@link apiKeyOwnerSchema} accepts. */
   revoke: (
     target: {
       readonly id: string;
-      readonly owner?: ApiKeyOwnerInput | undefined;
+      readonly owner?: ApiKeyOwner | undefined;
     },
     options?: PortCallOptions,
   ) => Promise<RevokeApiKeyResult>;
   /** Deletes every key `owner` holds, for "sign out everywhere", disabling and deleting a person, and deleting a system principal: nothing references a principal, so its keys outlive it unless the host calls this when it removes one. Throws if `owner` is not an owner {@link apiKeyOwnerSchema} accepts. */
   revokeAllForOwner: (
-    owner: Readonly<ApiKeyOwnerInput>,
+    owner: Readonly<ApiKeyOwner>,
     options?: PortCallOptions,
   ) => Promise<{ readonly revoked: number }>;
   /**
@@ -195,8 +194,8 @@ function summaryOf(stored: StoredApiKey): ApiKeySummary {
   };
 }
 
-/** The owner a caller named, as the store records it. Throws on anything {@link apiKeyOwnerSchema} refuses, so a misspelt kind can never be read as a person. */
-function ownerOf(owner: Readonly<ApiKeyOwnerInput>): ApiKeyOwner {
+/** The owner a caller named, checked at run time as well as by type, since an untyped caller could name any object. Throws on anything {@link apiKeyOwnerSchema} refuses: a missing or misspelt kind is never read as a person. */
+function ownerOf(owner: Readonly<ApiKeyOwner>): ApiKeyOwner {
   return z.parse(apiKeyOwnerSchema, owner);
 }
 
