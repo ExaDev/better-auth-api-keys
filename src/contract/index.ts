@@ -3,7 +3,9 @@ export {
   type ApiKeysContractVersion,
 } from "./version.ts";
 export {
+  API_KEY_CREATED_BY_MAX_LENGTH,
   API_KEY_NAME_MAX_LENGTH,
+  apiKeyCreatedBySchema,
   apiKeyNameSchema,
   apiKeyOwnerSchema,
   apiKeySystemOwnerSchema,
