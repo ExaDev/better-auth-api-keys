@@ -328,6 +328,14 @@ jobs:
         run: |
           npm pkg set name="$ALIAS"
           npm pkg set description="An alias of $PRIMARY, published from the same release. $(jq -r .description package.json)"
+      - name: Wait for the primary's published version to be installable
+        if: steps.existing.outputs.published != 'true'
+        env:
+          # The alias jobs start the moment the Release job ends, but npm's registry can take a while after a publish to list the version: in 0.2.0's release the packument showed it 54 seconds after the publish command returned, and `npm pack` failed with ETARGET meanwhile. The budget is about five times that lag; the interval keeps the polling well below any registry rate limit while still noticing the version within a few seconds. Both stay inside this job's timeout-minutes.
+          WAIT_BUDGET_SECONDS: "300"
+          WAIT_INTERVAL_SECONDS: "10"
+        # Passes at once when the version is already visible, as for a backfill of an old release.
+        run: node .github/scripts/wait-for-primary.ts "$PRIMARY@$VERSION"
       - name: Pack the alias and check it against the primary's published tarball
         id: pack
         if: steps.existing.outputs.published != 'true'
