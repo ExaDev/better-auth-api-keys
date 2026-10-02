@@ -16,6 +16,7 @@ import {
   TEST_BASE_URL,
   type TestPlugin,
 } from "../../src/test-support/plugin-fixture.ts";
+import { readmeMigration, statementsOf } from "./readme-migration.ts";
 
 const timestamp = (name: string) => integer(name, { mode: "timestamp_ms" });
 
@@ -135,32 +136,24 @@ const CORE_TABLES = [
   `CREATE TABLE verification (id text PRIMARY KEY, identifier text NOT NULL, value text NOT NULL, expires_at integer NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)`,
 ];
 
-/** The indexes {@link apiKey} declares: a name unique per owner, and `user_id` indexed for the cascading delete. Dropping the 0.1.0 table drops its `(user_id, name)` index with it. */
-const API_KEY_INDEXES = [
+/** The `api_key` table as {@link apiKey} declares it: a name unique per owner, and `user_id` indexed for the cascading delete. */
+const API_KEY_TABLE = [
+  `CREATE TABLE api_key (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, created_by text, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
   "CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name)",
   "CREATE INDEX api_key_user_id ON api_key (user_id)",
 ];
 
-/** The `api_key` table as {@link apiKey} declares it. */
-const API_KEY_TABLE = [
-  `CREATE TABLE api_key (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, created_by text, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
-  ...API_KEY_INDEXES,
-];
+/** The `api_key` table as version 0.1.0 of the package declared it: every key a person's, and every key expiring. `foreignKeys: false` leaves out the reference to `user`, as a database built without foreign-key enforcement would behave, so a key can outlive its person. */
+function v0_1_0ApiKeyTable(foreignKeys: boolean): string[] {
+  const references = foreignKeys
+    ? " REFERENCES user(id) ON DELETE CASCADE"
+    : "";
 
-/** The `api_key` table as version 0.1.0 of the package declared it: every key a person's, and every key expiring. */
-const V0_1_0_API_KEY_TABLE = [
-  `CREATE TABLE api_key (id text PRIMARY KEY, user_id text NOT NULL REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer NOT NULL, last_used_at integer)`,
-  "CREATE UNIQUE INDEX api_key_user_id_name ON api_key (user_id, name)",
-];
-
-/** The README's migration from 0.1.0, statement for statement: SQLite cannot relax `NOT NULL` in place, so the table is rebuilt and its rows copied across. Nothing references `api_key`, so dropping the old table needs no foreign-key pragma. */
-const MIGRATION_FROM_V0_1_0 = [
-  `CREATE TABLE api_key_new (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, created_by text, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
-  "INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at) SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key",
-  "DROP TABLE api_key",
-  "ALTER TABLE api_key_new RENAME TO api_key",
-  ...API_KEY_INDEXES,
-];
+  return [
+    `CREATE TABLE api_key (id text PRIMARY KEY, user_id text NOT NULL${references}, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer NOT NULL, last_used_at integer)`,
+    "CREATE UNIQUE INDEX api_key_user_id_name ON api_key (user_id, name)",
+  ];
+}
 
 async function run(statements: readonly string[]): Promise<void> {
   await env.DATABASE.batch(
@@ -169,13 +162,15 @@ async function run(statements: readonly string[]): Promise<void> {
 }
 
 /** Recreates the tables, empty, with `api_key` as version 0.1.0 declared it. */
-export async function resetToV0_1_0(): Promise<void> {
-  await run([...CORE_TABLES, ...V0_1_0_API_KEY_TABLE]);
+export async function resetToV0_1_0(
+  options: { readonly foreignKeys: boolean } = { foreignKeys: true },
+): Promise<void> {
+  await run([...CORE_TABLES, ...v0_1_0ApiKeyTable(options.foreignKeys)]);
 }
 
-/** Runs the README's migration from 0.1.0. */
+/** Runs the README's D1 migration file from 0.1.0, read from the README itself, as one batch, which D1 applies as one transaction as `wrangler d1 migrations apply` does a migration file. */
 export async function migrateFromV0_1_0(): Promise<void> {
-  await run(MIGRATION_FROM_V0_1_0);
+  await run(statementsOf(readmeMigration().d1));
 }
 
 /** The `api_key` table as the database itself describes it: each column's name, type, nullability and key, and each index's name, uniqueness and columns. Read from the live database, so it shows what a migration actually built rather than what any declaration says. */

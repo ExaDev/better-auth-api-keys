@@ -32,6 +32,7 @@ import {
   resetDatabase,
   resetToV0_1_0,
 } from "./d1-fixture.ts";
+import { readmeMigration, statementsOf } from "./readme-migration.ts";
 
 const LIFETIME_DAYS = 30;
 const LIFETIME_MS = LIFETIME_DAYS * DAY_MS;
@@ -305,26 +306,46 @@ describe("the plugin on D1", () => {
 });
 
 describe("upgrading a 0.1.0 database", () => {
-  it("keeps a person's key verifying after the README's migration, and then accepts system keys", async () => {
-    await resetDatabase();
-    const declared = await describeApiKeyTable();
-    await resetToV0_1_0();
-    await addUser("alice");
-    const plaintext = await generateKey(TEST_PREFIX, seededRandomSource(1));
+  /** A 0.1.0 key of `userId`'s, last used at `TEST_START`, with its plaintext. */
+  async function insertV0_1_0Key(id: string, userId: string, seed: number) {
+    const plaintext = await generateKey(TEST_PREFIX, seededRandomSource(seed));
     const keyHash = await createWebCryptoKeyHasher(TEST_PEPPER).hash(plaintext);
     const expiresAt = TEST_START.getTime() + LIFETIME_MS;
     await env.DATABASE.prepare(
-      "INSERT INTO api_key (id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES ('old-key', 'alice', 'laptop', ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO api_key (id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at) VALUES (?, ?, 'laptop', ?, ?, ?, ?, ?, ?, ?)",
     )
       .bind(
+        id,
+        userId,
         keyHash,
         keyStart(TEST_PREFIX, plaintext),
         JSON.stringify({ access: "read" }),
         JSON.stringify({ provider: "google" }),
         TEST_START.getTime(),
         expiresAt,
+        TEST_START.getTime(),
       )
       .run();
+
+    return { plaintext, expiresAt };
+  }
+
+  it("gives the plain SQLite migration exactly the D1 file's statements, inside one transaction", () => {
+    const { d1, sqlite } = readmeMigration();
+    expect(statementsOf(d1).length).toBeGreaterThan(0);
+    expect(sqlite).toBe(`BEGIN;\n${d1}COMMIT;\n`);
+  });
+
+  it("keeps a person's key, with its last use, verifying after the README's migration, builds the declared table, and then accepts system keys", async () => {
+    await resetDatabase();
+    const declared = await describeApiKeyTable();
+    await resetToV0_1_0();
+    await addUser("alice");
+    const { plaintext, expiresAt } = await insertV0_1_0Key(
+      "old-key",
+      "alice",
+      1,
+    );
 
     await migrateFromV0_1_0();
 
@@ -340,6 +361,7 @@ describe("upgrading a 0.1.0 database", () => {
         id: "old-key",
         owner: { kind: "user", id: "alice" },
         expiresAt: new Date(expiresAt),
+        lastUsedAt: TEST_START,
       },
     });
     const created = await service.create({
@@ -350,5 +372,54 @@ describe("upgrading a 0.1.0 database", () => {
       claims: { provider: "google" },
     });
     expect(created.outcome).toBe("created");
+  });
+
+  it("enforces the owner check, the unique name per owner and the cascading delete on the migrated table", async () => {
+    await resetToV0_1_0();
+    await addUser("alice");
+    const { plaintext } = await insertV0_1_0Key("old-key", "alice", 1);
+    await migrateFromV0_1_0();
+
+    const insert = env.DATABASE.prepare(
+      "INSERT INTO api_key (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES (?, ?, 'alice', ?, 'laptop', ?, 's', '{}', '{}', 0, 1)",
+    );
+    await expect(
+      insert.bind("same-name", "user", "alice", "hash-same-name").run(),
+    ).rejects.toThrow("UNIQUE constraint failed");
+    await expect(
+      insert.bind("disagreeing", "system", "alice", "hash-disagreeing").run(),
+    ).rejects.toThrow("CHECK constraint failed");
+    await insert.bind("principals", "system", null, "hash-principals").run();
+
+    await env.DATABASE.prepare("DELETE FROM user WHERE id = ?")
+      .bind("alice")
+      .run();
+    const plugin = testPlugin();
+    const service = apiKeysOf(await d1Auth(plugin).$context, plugin);
+    expect(await service.verify(plaintext)).toEqual({ outcome: "unknown" });
+    const remaining = await env.DATABASE.prepare(
+      "SELECT id FROM api_key",
+    ).all();
+    expect(remaining.results).toEqual([{ id: "principals" }]);
+  });
+
+  it("changes nothing when a key whose person is gone makes the copy fail", async () => {
+    await resetToV0_1_0({ foreignKeys: false });
+    await addUser("alice");
+    await insertV0_1_0Key("kept", "alice", 1);
+    await insertV0_1_0Key("orphaned", "nobody", 2);
+
+    await expect(migrateFromV0_1_0()).rejects.toThrow(
+      "FOREIGN KEY constraint failed",
+    );
+
+    const kept = await env.DATABASE.prepare(
+      "SELECT id FROM api_key ORDER BY id",
+    ).all();
+    expect(kept.results).toEqual([{ id: "kept" }, { id: "orphaned" }]);
+    const tables = await env.DATABASE.prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'api_key%'",
+    ).all();
+    expect(tables.results).toEqual([{ name: "api_key" }]);
   });
 });
