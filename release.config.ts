@@ -12,7 +12,7 @@ const releaseRules = [
 ];
 
 /**
- * Runs on `main` from the Release job in .github/workflows/ci.yml. Every plugin's verifyConditions runs before anything is written, and the npm plugin's checks that the job can publish (an OIDC token exchange with npm for this package, or else an NPM_TOKEN, which the job blanks), so a run that cannot publish stops there, before the release commit, the tag or the GitHub Release exists, and the GitHub plugin's fail step opens an issue saying so, which the next successful release closes. Otherwise it bumps the version from the commits since the last tag, commits CHANGELOG.md and package.json back to main, tags, publishes to npm with trusted publishing and creates the GitHub Release.
+ * Runs on `main` from the Release job in .github/workflows/ci.yml. Every plugin's verifyConditions runs before anything is written, and the npm plugin's checks that the job can publish (an OIDC token exchange with npm for this package, or else an NPM_TOKEN, which the job blanks), so a run that cannot publish stops there, before the release commit, the tag or the GitHub Release exists, and the GitHub plugin's fail step opens an issue saying so, which the next successful release closes. That issue always carries the `semantic-release` label, and GitHub refuses a new issue that names a label the repository does not have, so the repository keeps that label. Otherwise it bumps the version from the commits since the last tag, commits CHANGELOG.md and package.json back to main, tags, publishes to npm with trusted publishing and creates the GitHub Release.
  */
 const config: Options = {
   branches: ["main"],

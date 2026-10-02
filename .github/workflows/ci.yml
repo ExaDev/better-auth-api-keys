@@ -196,7 +196,7 @@ jobs:
         # HUSKY=0 so the commit-msg hook never runs against the release commit.
         run: HUSKY=0 pnpm exec semantic-release
         env:
-          # The workflow's own token for GitHub's API (the release, its comments and labels, and the issue a failed release opens), as wire-mesh and build-identity release. With the App token, GitHub refused the failure issue the GitHub plugin opens (a 422 on its not yet existing semantic-release label), so a failed release opened no issue at all, while the workflow token is what creates the plugin's labels in those repositories. The release commit and tag still push with the App's credentials, which the checkout above persisted and semantic-release tries first.
+          # The workflow's own token for GitHub's API (the release, its comments and labels, and the issue a failed release opens), as wire-mesh and build-identity release, where it has created the GitHub plugin's released labels. The release commit and tag still push with the App's credentials, which the checkout above persisted and semantic-release tries first.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would be used in preference to the OIDC exchange.
           NPM_TOKEN: ""
