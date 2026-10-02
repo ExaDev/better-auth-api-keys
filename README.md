@@ -76,7 +76,7 @@ The plugin registers an `apiKey` model (`id`, `userId` referencing `user.id` wit
 
 `pnpm test` runs the unit tests (the core, the plugin over better-auth's memory adapter, the manifest and the import boundary), and `pnpm test:workers` runs the adapter-backed store against D1 through better-auth's Drizzle adapter in a real Workers isolate. `pnpm lint`, `pnpm typecheck` and `pnpm build` (tsdown, ESM only, with declarations) complete the checks CI runs; `pnpm test:mutation` runs Stryker. The lint configuration refuses any Node builtin, anything Cloudflare, Drizzle, a relative import leaving `src/`, and better-auth outside `src/better-auth/`, so the package stays runtime-neutral and its other entry points work without better-auth.
 
-Commits follow Conventional Commits, checked by commitlint. Merging to `main` releases through semantic-release, which publishes to npm with trusted publishing from the Release job in `.github/workflows/ci.yml`.
+Commits follow Conventional Commits, checked by commitlint. Merging to `main` releases through semantic-release, which publishes to npm with trusted publishing from the Release job in `.github/workflows/ci.yml`. The same release is then published under each unscoped name in `.github/npm-aliases.json`, one parallel `Publish alias` job per name, each building the release tag and refusing to publish unless its tarball matches the primary's apart from the name and description. Each alias name needs its own trusted publisher for `ci.yml`. To publish an existing release under the aliases (after registering a new alias's trusted publisher, say), run the CI workflow by hand with `alias_tag` set to the primary's latest release tag; a version an alias already has is skipped.
 
 ## Licence
 
