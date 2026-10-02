@@ -9,6 +9,7 @@ import { generateKey, keyStart } from "../../src/core/index.ts";
 import { seededRandomSource } from "../../src/test-support/random-sources.ts";
 import {
   DAY_MS,
+  TEST_LAST_USED_INTERVAL_MS,
   TEST_PREFIX,
   TEST_START,
 } from "../../src/test-support/service-fixture.ts";
@@ -306,31 +307,44 @@ describe("the plugin on D1", () => {
 });
 
 describe("upgrading a 0.1.0 database", () => {
-  /** A 0.1.0 key of `userId`'s, last used at `TEST_START`, with its plaintext. */
   /** Each key's random source starts from the next seed, so every key a test inserts is distinct and every run replays exactly. */
   let seed = 0;
+  /**
+   * Inserts a 0.1.0 key of `userId`'s and returns its plaintext and its row. Every column of the same type holds a different value (the name is not its start, the creation, last use and expiry are three instants, the scopes are not the claims), so a migration that copies one column into another cannot leave the row unchanged.
+   */
   async function insertV0_1_0Key(id: string, userId: string) {
     seed++;
     const plaintext = await generateKey(TEST_PREFIX, seededRandomSource(seed));
-    const keyHash = await createWebCryptoKeyHasher(TEST_PEPPER).hash(plaintext);
-    const expiresAt = TEST_START.getTime() + LIFETIME_MS;
+    const row = {
+      id,
+      user_id: userId,
+      name: `${id} laptop`,
+      key_hash: await createWebCryptoKeyHasher(TEST_PEPPER).hash(plaintext),
+      start: keyStart(TEST_PREFIX, plaintext),
+      scopes: JSON.stringify({ access: "write", toolsets: ["artifacts"] }),
+      claims: JSON.stringify({ provider: "google" }),
+      created_at: TEST_START.getTime(),
+      expires_at: TEST_START.getTime() + LIFETIME_MS,
+      last_used_at: TEST_START.getTime() + TEST_LAST_USED_INTERVAL_MS,
+    };
     await env.DATABASE.prepare(
-      "INSERT INTO api_key (id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at) VALUES (?, ?, 'laptop', ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO api_key (id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
       .bind(
-        id,
-        userId,
-        keyHash,
-        keyStart(TEST_PREFIX, plaintext),
-        JSON.stringify({ access: "read" }),
-        JSON.stringify({ provider: "google" }),
-        TEST_START.getTime(),
-        expiresAt,
-        TEST_START.getTime(),
+        row.id,
+        row.user_id,
+        row.name,
+        row.key_hash,
+        row.start,
+        row.scopes,
+        row.claims,
+        row.created_at,
+        row.expires_at,
+        row.last_used_at,
       )
       .run();
 
-    return { plaintext, expiresAt };
+    return { plaintext, row };
   }
 
   it("gives the plain SQLite migration exactly the D1 file's statements, inside one transaction", () => {
@@ -339,33 +353,48 @@ describe("upgrading a 0.1.0 database", () => {
     expect(sqlite).toBe(`PRAGMA foreign_keys = ON;\nBEGIN;\n${d1}COMMIT;\n`);
   });
 
-  it("keeps a person's key, with its last use, verifying after the README's migration, builds the declared table, and then accepts system keys", async () => {
+  it("copies every column of a person's key unchanged in the README's migration, builds the declared table, keeps the key verifying, and then accepts system keys", async () => {
     await resetDatabase();
     const declared = await describeApiKeyTable();
     await resetToV0_1_0();
     await addUser("alice");
-    const { plaintext, expiresAt } = await insertV0_1_0Key("old-key", "alice");
+    const { plaintext, row } = await insertV0_1_0Key("old-key", "alice");
 
     await migrateFromV0_1_0();
 
-    // better-auth's Drizzle schema check compares the plugin's schema with the Drizzle declaration, never the database, so it cannot tell whether the migration ran; the database's own description of the table can.
+    // The database's own description of the migrated table, compared with the table the hand-written API_KEY_TABLE statements build (which the Drizzle declaration in d1-fixture.ts mirrors, and better-auth's schema check compares with the plugin). better-auth's Drizzle schema check never reads the database, so it cannot tell whether a migration ran.
     expect(await describeApiKeyTable()).toEqual(declared);
+    expect(
+      await env.DATABASE.prepare("SELECT * FROM api_key WHERE id = ?")
+        .bind(row.id)
+        .first(),
+    ).toEqual({
+      ...row,
+      owner_kind: "user",
+      owner_id: "alice",
+      created_by: null,
+    });
     const plugin = testPlugin();
     const context = await d1Auth(plugin).$context;
     const service = apiKeysOf(context, plugin);
-    const verified = await service.verify(plaintext);
-    expect(verified).toMatchObject({
+    expect(await service.verify(plaintext)).toEqual({
       outcome: "valid",
       key: {
-        id: "old-key",
+        id: row.id,
         owner: { kind: "user", id: "alice" },
-        expiresAt: new Date(expiresAt),
-        lastUsedAt: TEST_START,
+        name: row.name,
+        start: row.start,
+        scopes: { access: "write", toolsets: ["artifacts"] },
+        claims: { provider: "google" },
+        createdAt: new Date(row.created_at),
+        expiresAt: new Date(row.expires_at),
+        createdBy: undefined,
+        lastUsedAt: new Date(row.last_used_at),
       },
     });
     const created = await service.create({
       owner: { kind: "system", id: "deployer" },
-      name: "laptop",
+      name: row.name,
       lifetimeMs: LIFETIME_MS,
       scopes: { access: "read" },
       claims: { provider: "google" },
@@ -376,19 +405,25 @@ describe("upgrading a 0.1.0 database", () => {
   it("enforces the owner check, the unique name per owner and the cascading delete on the migrated table", async () => {
     await resetToV0_1_0();
     await addUser("alice");
-    const { plaintext } = await insertV0_1_0Key("old-key", "alice");
+    const { plaintext, row } = await insertV0_1_0Key("old-key", "alice");
     await migrateFromV0_1_0();
 
     const insert = env.DATABASE.prepare(
-      "INSERT INTO api_key (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES (?, ?, 'alice', ?, 'laptop', ?, 's', '{}', '{}', 0, 1)",
+      "INSERT INTO api_key (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES (?, ?, 'alice', ?, ?, ?, 's', '{}', '{}', 0, 1)",
     );
     await expect(
-      insert.bind("same-name", "user", "alice", "hash-same-name").run(),
+      insert
+        .bind("same-name", "user", "alice", row.name, "hash-same-name")
+        .run(),
     ).rejects.toThrow("UNIQUE constraint failed");
     await expect(
-      insert.bind("disagreeing", "system", "alice", "hash-disagreeing").run(),
+      insert
+        .bind("disagreeing", "system", "alice", row.name, "hash-disagreeing")
+        .run(),
     ).rejects.toThrow("CHECK constraint failed");
-    await insert.bind("principals", "system", null, "hash-principals").run();
+    await insert
+      .bind("principals", "system", null, row.name, "hash-principals")
+      .run();
 
     await env.DATABASE.prepare("DELETE FROM user WHERE id = ?")
       .bind("alice")
