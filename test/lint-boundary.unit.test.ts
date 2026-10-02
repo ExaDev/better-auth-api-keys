@@ -34,6 +34,7 @@ async function banned(
     throw new Error(unexpected.map((message) => message.message).join("\n"));
   }
   const bannedLines = new Set(result.messages.map((message) => message.line));
+
   return specifiers.filter((_, index) => bannedLines.has(index + 1));
 }
 
@@ -46,15 +47,10 @@ const everyFolder = [
   "src/better-auth/schema.ts",
 ];
 
-// The package is built to move to its own repository, and nothing else in this flat workspace enforces that it stays independent, so its own lint configuration does. These lint real imports in each folder, which also proves the package's extra bans were merged with the isomorphism guard's rather than replacing them.
+// Nothing but the package's own lint configuration keeps it runtime-neutral and its entry points independent of better-auth, so these lint real imports in each folder, which also proves the package's extra bans were merged with the isomorphism guard's rather than replacing them.
 const isomorphismBans = ["node:crypto", "fs"];
-const extractabilityBans = [
-  "db",
-  "contract",
-  "tokens",
-  "access-policy/roles",
-  "api",
-  "../../apps/api/src/index.ts",
+const boundaryBans = [
+  "../../outside-the-package.ts",
   "cloudflare:workers",
   "@cloudflare/workers-types",
   "drizzle-orm",
@@ -70,17 +66,17 @@ const allowedEverywhere = ["zod/mini", "../contract/index.ts"];
 
 describe("the package's import boundary", () => {
   it.each(everyFolder.filter((file) => !file.startsWith("src/better-auth/")))(
-    "keeps the isomorphism guard and bans workspace packages, Cloudflare, Drizzle, escaping the package and better-auth in %s",
+    "keeps the isomorphism guard and bans Cloudflare, Drizzle, escaping the package and better-auth in %s",
     async (file) => {
       const specifiers = [
         ...isomorphismBans,
-        ...extractabilityBans,
+        ...boundaryBans,
         ...betterAuthImports,
         ...allowedEverywhere,
       ];
       expect(await banned(file, specifiers)).toEqual([
         ...isomorphismBans,
-        ...extractabilityBans,
+        ...boundaryBans,
         ...betterAuthImports,
       ]);
     },
@@ -92,13 +88,13 @@ describe("the package's import boundary", () => {
     async () => {
       const specifiers = [
         ...isomorphismBans,
-        ...extractabilityBans,
+        ...boundaryBans,
         ...betterAuthImports,
         ...allowedEverywhere,
       ];
       expect(await banned("src/better-auth/schema.ts", specifiers)).toEqual([
         ...isomorphismBans,
-        ...extractabilityBans,
+        ...boundaryBans,
       ]);
     },
     LINT_TIMEOUT_MS,

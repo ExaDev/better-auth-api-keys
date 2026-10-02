@@ -1,9 +1,28 @@
 {
   "name": "@exadev/better-auth-api-keys",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.0.0",
   "description": "A better-auth plugin for long-lived API keys: checksummed keys checked offline, stored only as a peppered HMAC, found with one indexed lookup, with a throttled last-used write and no session hook.",
+  "keywords": [
+    "better-auth",
+    "better-auth-plugin",
+    "api-key",
+    "api-keys",
+    "authentication",
+    "hmac",
+    "cloudflare-workers"
+  ],
+  "homepage": "https://github.com/ExaDev/better-auth-api-keys#readme",
+  "bugs": {
+    "url": "https://github.com/ExaDev/better-auth-api-keys/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ExaDev/better-auth-api-keys.git"
+  },
+  "license": "MIT",
+  "author": "Joseph Mearman <joseph@mearman.co.uk>",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/better-auth/index.d.ts",
@@ -24,16 +43,23 @@
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "types": "./dist/better-auth/index.d.ts",
   "files": [
     "dist"
   ],
-  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@12.6.0+sha512.3ef68f951cb111ac204b4a5a16f0b2ddf0da56a96e0413e81d855d9f0b55ef926714709028e1cd00c405c2c5fb7b9e8ec4dc46777c805d0373c2f2ff00fd20ec",
   "scripts": {
     "build": "turbo run _build",
-    "_build": "tsc -p tsconfig.build.json",
+    "_build": "tsdown",
     "lint": "turbo run _lint",
     "_lint": "eslint . --fix --cache --max-warnings 0",
     "typecheck": "turbo run _typecheck",
@@ -44,32 +70,60 @@
     "_test:coverage": "vitest run --project unit --coverage",
     "test:workers": "turbo run _test:workers",
     "_test:workers": "vitest run --config vitest.workers.config.ts",
-    "test:mutation": "turbo run _test:mutation",
-    "_test:mutation": "stryker run stryker.config.ts"
+    "test:mutation": "stryker run stryker.config.ts",
+    "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run test && tsdown && publint && attw --pack --profile esm-only",
+    "prepare": "husky",
+    "release": "semantic-release"
   },
-  "license": "MIT",
-  "packageManager": "pnpm@12.4.1",
-  "dependencies": {
-    "zod": "4.6.5"
+  "peerDependencies": {
+    "@better-auth/core": "^1.7.5",
+    "better-auth": "^1.7.5",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
     "@better-auth/core": "1.7.5",
     "@cloudflare/vitest-pool-workers": "0.22.0",
     "@cloudflare/workers-types": "5.20260918.1",
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
+    "@commitlint/types": "21.2.3",
+    "@eslint/js": "10.0.1",
+    "@eslint/json": "2.1.0",
+    "@eslint/markdown": "8.0.3",
+    "@exadev/eslint-config": "2.31.0",
+    "@semantic-release/changelog": "7.0.0",
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/git": "11.0.1",
+    "@semantic-release/github": "12.0.10",
+    "@semantic-release/npm": "13.2.0",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "@stryker-mutator/api": "10.0.0",
     "@stryker-mutator/core": "10.0.0",
     "@stryker-mutator/typescript-checker": "10.0.0",
     "@stryker-mutator/vitest-runner": "10.0.0",
     "@types/node": "26.5.1",
     "@vitest/coverage-v8": "4.1.11",
     "better-auth": "1.7.5",
+    "conventional-changelog-conventionalcommits": "10.4.0",
     "drizzle-orm": "1.0.0-rc.4",
     "eslint": "10.10.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-depend": "1.5.0",
+    "eslint-plugin-prettier": "5.5.6",
+    "eslint-plugin-yml": "3.8.1",
+    "globals": "17.12.0",
+    "husky": "9.1.7",
+    "lint-staged": "17.5.1",
+    "prettier": "3.9.9",
+    "publint": "0.3.24",
+    "semantic-release": "25.0.9",
+    "tsdown": "0.23.0",
+    "turbo": "2.11.4",
     "typescript": "6.0.3",
+    "typescript-eslint": "8.70.1",
     "vitest": "4.1.11",
-    "wrangler": "4.134.0"
-  },
-  "peerDependencies": {
-    "@better-auth/core": "^1.7.5",
-    "better-auth": "^1.7.5"
+    "wrangler": "4.134.0",
+    "zod": "4.6.5"
   }
 }
