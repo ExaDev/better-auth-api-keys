@@ -16,7 +16,7 @@ A key is a prefix the host chooses (`exshow_` in the examples here) followed by 
 - **Offline check first.** The checksum is the standard CRC-32 of the prefix and random part. `verify` checks the prefix, the length, the alphabet and the checksum before anything else, so a mistyped, truncated or made-up key is refused without a hash or a database read. Any single-character change to a genuine key fails the check. The prefix and checksum also let a leaked key be recognised by a person or a secret scanner.
 - **Peppered hash only.** The key itself is never stored. The database holds `HMAC-SHA256(pepper, key)` in a unique column, where the pepper is a server secret kept out of the database (a Worker secret such as `API_KEY_PEPPER` in the example below). A copy of the database alone gives nothing to test guesses against. The hasher is injected, and the Web Crypto one caches its imported key per instance.
 - **One indexed lookup.** A presented key is found by an equality match on its hash, so no constant-time comparison is needed: the lookup reveals nothing a guess could build on.
-- **Every key expires.** An expiry is required at creation, bounded by the host's `maxLifetimeMs`. A key is valid up to, not at, its expiry instant.
+- **Every person's key expires.** An expiry is required at creation, bounded by the host's `maxLifetimeMs`. A key is valid up to, not at, its expiry instant. Only a system principal's key may be created with no expiry, and only when the host sets `allowNonExpiringSystemKeys`; the rule is checked on every read as well, so turning the setting off disables every key it let through (they verify as `unknown` and list as `unreadable`, to be revoked).
 - **Throttled last-used write, only for keys the host accepts.** `verify` only reads, so a key the host goes on to refuse for its own reasons (its owner disabled, say) never looks used. Once the host accepts a key it calls `recordUse`, which, when the key's recorded last use is older than the host's `lastUsedIntervalMs`, hands one conditional write to the host's `defer` (a Worker's `ctx.waitUntil`) that sets the time only if it is still older than the cut-off, so a busy key costs at most one write per interval and two racing requests write once.
 - **No session hook.** The plugin contributes no endpoints, no hooks, no middleware and no rate-limit rules. A key authenticates only where the host calls `verify` itself; it never becomes a better-auth session, so it cannot reach better-auth's own endpoints.
 - **Scopes and claims are the host's.** Both are opaque to the package, typed by Zod schemas the host injects and stored as JSON. They are validated on creation and on every read; a stored key whose scopes or claims no longer pass the schemas verifies as `unknown`, and lists as `unreadable` so its owner can still revoke it. Whether scopes permit a request is decided by the host's injected authoriser.
@@ -33,7 +33,7 @@ A system key is programmatic access that belongs to no person, so it keeps worki
 const created = await service.create({
   owner: { kind: "system", id: principal.id },
   name: "nightly export",
-  lifetimeMs: 365 * DAY_MS,
+  lifetimeMs: 365 * DAY_MS, // or null, when allowNonExpiringSystemKeys is set
   scopes,
   claims,
 });
@@ -86,13 +86,13 @@ if (result.outcome === "valid" /* and the host's own checks accept it */) {
 }
 ```
 
-The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"` or `"system"`) and `ownerId`; a nullable `userId` referencing `user.id` with cascading delete, set (to `ownerId`) only for a person's key, and indexed for that delete; `name`; `keyHash` unique; `start`; `scopes` and `claims` as JSON; `createdAt`; `expiresAt`; and an unindexed nullable `lastUsedAt`; with `(ownerKind, ownerId, name)` unique. The owner is two required columns rather than a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a nullable column (SQL Server and MongoDB treat nulls in a unique index as equal), and a name must be unique per owner. Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
+The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"` or `"system"`) and `ownerId`; a nullable `userId` referencing `user.id` with cascading delete, set (to `ownerId`) only for a person's key, and indexed for that delete; `name`; `keyHash` unique; `start`; `scopes` and `claims` as JSON; `createdAt`; a nullable `expiresAt` (null only for a system key with no expiry); and an unindexed nullable `lastUsedAt`; with `(ownerKind, ownerId, name)` unique. The owner is two required columns rather than a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a nullable column (SQL Server and MongoDB treat nulls in a unique index as equal), and a name must be unique per owner. Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
 
-better-auth's schema cannot express a check across columns, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` does not agree with its owner. A host's own migration should add the same rule as a check constraint, as the SQLite one below does.
+better-auth's schema cannot express a check across columns, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` does not agree with its owner, and the service refuses a person's key with no expiry whatever the database holds. A host's own migration should add the same rule as a check constraint, as the SQLite one below does.
 
 ### Upgrading from 0.1.0
 
-0.1.0 stored every key as a person's, with `userId` required. Upgrading needs a migration in the host's own tool (the package ships none), and better-auth's schema check fails at start-up until it has run. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's. With the column names from the Drizzle example (`user_id`, `key_hash` and so on; adjust them to your own):
+0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none), and better-auth's schema check fails at start-up until it has run. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's. With the column names from the Drizzle example (`user_id`, `key_hash` and so on; adjust them to your own):
 
 ```sql
 CREATE TABLE api_key_new (
@@ -106,10 +106,10 @@ CREATE TABLE api_key_new (
   scopes text NOT NULL,
   claims text NOT NULL,
   created_at integer NOT NULL,
-  expires_at integer NOT NULL,
+  expires_at integer,
   last_used_at integer,
   CONSTRAINT api_key_owner CHECK (
-    (owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id)
+    (owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL)
     OR (owner_kind = 'system' AND user_id IS NULL)
   )
 );
@@ -121,7 +121,7 @@ CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
 CREATE INDEX api_key_user_id ON api_key (user_id);
 ```
 
-Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), make `user_id` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
+Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
 
 The Drizzle declaration matching the migration:
 
@@ -139,7 +139,7 @@ export const apiKey = sqliteTable(
     scopes: text().notNull(),
     claims: text().notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
     lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
   },
   (table) => [
@@ -151,13 +151,13 @@ export const apiKey = sqliteTable(
     index("api_key_user_id").on(table.userId),
     check(
       "api_key_owner",
-      sql`(${table.ownerKind} = 'user' AND ${table.userId} IS NOT NULL AND ${table.userId} = ${table.ownerId}) OR (${table.ownerKind} = 'system' AND ${table.userId} IS NULL)`,
+      sql`(${table.ownerKind} = 'user' AND ${table.userId} IS NOT NULL AND ${table.userId} = ${table.ownerId} AND ${table.expiresAt} IS NOT NULL) OR (${table.ownerKind} = 'system' AND ${table.userId} IS NULL)`,
     ),
   ],
 );
 ```
 
-The code changes are small. Existing calls keep their meaning, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
+The code changes are small. Existing calls keep their meaning, but three types widen: `expiresAt` is `Date | null`, `create`'s `lifetimeMs` accepts `null`, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner` and a nullable `expiresAt`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
 
 ## Entry points
 

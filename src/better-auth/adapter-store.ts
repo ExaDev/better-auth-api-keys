@@ -26,7 +26,8 @@ const apiKeyRowSchema = z.object({
   scopes: z.unknown(),
   claims: z.unknown(),
   createdAt: z.date(),
-  expiresAt: z.date(),
+  /** `null` for a key with no expiry, but never absent: a row missing the field is malformed, not a key that never expires. */
+  expiresAt: z.nullable(z.date()),
   lastUsedAt: z.nullish(z.date()),
 });
 

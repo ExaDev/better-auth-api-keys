@@ -82,6 +82,7 @@ export function apiKeys<
     prefix: options.prefix,
     maxLifetimeMs: options.maxLifetimeMs,
     lastUsedIntervalMs: options.lastUsedIntervalMs,
+    allowNonExpiringSystemKeys: options.allowNonExpiringSystemKeys,
   });
   // Every service this instance created, keyed by itself: a service found on a context is trusted only if it is one of these, which is also what gives it back its scope, claim and request types without a cast.
   const created = new WeakMap<object, Service>();

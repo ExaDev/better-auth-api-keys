@@ -70,7 +70,8 @@ export const storedApiKeySchema = z.object({
   scopes: z.unknown(),
   claims: z.unknown(),
   createdAt: z.date(),
-  expiresAt: z.date(),
+  /** When the key stops authenticating, or `null` for a system principal's key the host chose to create with no expiry. Explicitly `null`, never absent, so a store that drops the field fails validation rather than silently granting a key that never expires. */
+  expiresAt: z.nullable(z.date()),
   /** When the key last authenticated a request, to within the service's last-used interval; absent until its first use. */
   lastUsedAt: z.optional(z.date()),
 });

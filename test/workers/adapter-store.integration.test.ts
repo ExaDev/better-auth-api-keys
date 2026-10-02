@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  apiKeys,
   apiKeysOf,
   createAdapterApiKeyStore,
 } from "../../src/better-auth/index.ts";
@@ -19,6 +20,7 @@ import {
 import {
   TEST_PEPPER,
   testPlugin,
+  testPluginOptions,
 } from "../../src/test-support/plugin-fixture.ts";
 import { createWebCryptoKeyHasher } from "../../src/web-crypto/index.ts";
 import {
@@ -113,7 +115,10 @@ describe("the plugin on D1", () => {
   });
 
   it("deletes only the person's keys with the person: a system principal's keys, even one sharing the person's id, survive and still verify", async () => {
-    const plugin = testPlugin();
+    const plugin = apiKeys({
+      ...testPluginOptions(),
+      allowNonExpiringSystemKeys: true,
+    });
     const context = await d1Auth(plugin).$context;
     const service = apiKeysOf(context, plugin);
     const common = {
@@ -130,7 +135,7 @@ describe("the plugin on D1", () => {
       ...common,
       owner: { kind: "system", id: "deployer" },
       name: "deploys",
-      lifetimeMs: LIFETIME_MS,
+      lifetimeMs: null,
     });
     const sameId = await service.create({
       ...common,
@@ -158,14 +163,17 @@ describe("the plugin on D1", () => {
       outcome: "valid",
       key: principals.key,
     });
-    expect(principals.key.owner).toEqual({ kind: "system", id: "deployer" });
+    expect(principals.key).toMatchObject({
+      owner: { kind: "system", id: "deployer" },
+      expiresAt: null,
+    });
     expect(await service.verify(sameId.plaintext)).toEqual({
       outcome: "valid",
       key: sameId.key,
     });
   });
 
-  it("refuses a row whose user reference disagrees with its owner at the database, by the check the README recommends", async () => {
+  it("refuses a row whose user reference disagrees with its owner, or a person's key with no expiry, at the database, by the check the README recommends", async () => {
     await addUser("bob");
     const insert = env.DATABASE.prepare(
       "INSERT INTO api_key (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES (?, ?, ?, ?, 'n', ?, 's', '{}', '{}', 0, ?)",
@@ -174,6 +182,7 @@ describe("the plugin on D1", () => {
       ["system", "bob", "bob", 1],
       ["user", "bob", null, 1],
       ["user", "alice", "bob", 1],
+      ["user", "bob", "bob", null],
       ["robot", "bob", null, 1],
     ] as const) {
       const id = `${kind}-${ownerId}-${userId}-${expiresAt}`;
@@ -183,7 +192,7 @@ describe("the plugin on D1", () => {
     }
     await insert.bind("person", "user", "bob", "bob", "hash-person", 1).run();
     await insert
-      .bind("principal", "system", "bob", null, "hash-principal", 1)
+      .bind("principal", "system", "bob", null, "hash-principal", null)
       .run();
   });
 
