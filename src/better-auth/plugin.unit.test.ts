@@ -203,7 +203,7 @@ describe("the adapter store's owner invariant", () => {
       undefined,
     ],
   ])(
-    "refuses to verify %s, and lists it as malformed beside the owner's readable keys",
+    "refuses to verify %s, and lists it as corrupt beside the owner's readable keys",
     async (_, row, listedBy) => {
       const context = await authWith({ plugins: [testPlugin()] }).$context;
       const store = createAdapterApiKeyStore(() => context.adapter);
@@ -221,7 +221,7 @@ describe("the adapter store's owner invariant", () => {
         });
         const listings = await store.listByOwner(listedBy);
         expect(listings).toHaveLength(2);
-        expect(listings).toContainEqual({ outcome: "malformed", id: keyHash });
+        expect(listings).toContainEqual({ outcome: "corrupt", id: keyHash });
         expect(
           listings.flatMap((listing) =>
             listing.outcome === "stored" ? [listing.key.id] : [],
@@ -231,30 +231,30 @@ describe("the adapter store's owner invariant", () => {
     },
   );
 
-  it("lists a row whose creator fails its schema as malformed, and the service lists it for revoking", async () => {
+  it("lists a row whose creator fails its schema as corrupt, and the service lists it for revoking", async () => {
     const plugin = testPlugin();
     const context = await authWith({ plugins: [plugin] }).$context;
     await addUser(context.adapter, "alice");
     const service = apiKeysOf(context, plugin);
     const created = await service.create(createInput);
     if (created.outcome !== "created") throw new Error(created.outcome);
-    const malformed = await insertRow(context.adapter, {
+    const corrupt = await insertRow(context.adapter, {
       ownerKind: "user",
       ownerId: "alice",
       userId: "alice",
     });
     await context.adapter.updateMany({
       model: API_KEY_MODEL,
-      where: [{ field: "id", value: malformed }],
+      where: [{ field: "id", value: corrupt }],
       update: { createdBy: "", expiresAt: new Date(1) },
     });
     expect(await service.list(user("alice"))).toEqual([
       { status: "valid", key: created.key },
-      { status: "malformed", id: malformed, owner: user("alice") },
+      { status: "corrupt", id: corrupt, owner: user("alice") },
     ]);
-    expect(
-      await service.revoke({ id: malformed, owner: user("alice") }),
-    ).toEqual({ outcome: "revoked" });
+    expect(await service.revoke({ id: corrupt, owner: user("alice") })).toEqual(
+      { outcome: "revoked" },
+    );
     expect(await service.list(user("alice"))).toEqual([
       { status: "valid", key: created.key },
     ]);

@@ -76,7 +76,7 @@ function listingOf(row: unknown): ApiKeyListing {
     const identified = z.safeParse(z.object({ id: z.string() }), row);
     if (!identified.success) throw error;
 
-    return { outcome: "malformed", id: identified.data.id };
+    return { outcome: "corrupt", id: identified.data.id };
   }
 }
 

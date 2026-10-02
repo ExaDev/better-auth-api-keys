@@ -39,11 +39,11 @@ export type ApiKeyFindOutcome =
   | { readonly outcome: "not-found" };
 
 /**
- * One key of an owner's, as {@link ApiKeyStore.listByOwner} reads it: a stored key, or a row the store could not read as one (an owner column that disagrees with the owner, a field of the wrong shape), named by its id so the owner can still see and revoke it. Only a store over a database can hold a malformed row.
+ * One key of an owner's, as {@link ApiKeyStore.listByOwner} reads it: a stored key, or a row the store could not read as one (an owner column that disagrees with the owner, a field of the wrong shape), named by its id so the owner can still see and revoke it. Only a store over a database can hold a corrupt row.
  */
 export type ApiKeyListing =
   | { readonly outcome: "stored"; readonly key: StoredApiKey }
-  | { readonly outcome: "malformed"; readonly id: string };
+  | { readonly outcome: "corrupt"; readonly id: string };
 
 /** The result of {@link ApiKeyStore.delete}. */
 export type ApiKeyDeleteOutcome =
@@ -68,7 +68,7 @@ export interface ApiKeyStore {
     keyHash: string,
     options?: PortCallOptions,
   ) => Promise<ApiKeyFindOutcome>;
-  /** Every key `owner` holds, in no particular order: only keys of the same kind of owner with the same id. A row that cannot be read as a key is listed as malformed rather than failing the whole list, so one bad row cannot hide the owner's other keys. */
+  /** Every key `owner` holds, in no particular order: only keys of the same kind of owner with the same id. A row that cannot be read as a key is listed as corrupt rather than failing the whole list, so one bad row cannot hide the owner's other keys. */
   listByOwner: (
     owner: ApiKeyOwner,
     options?: PortCallOptions,

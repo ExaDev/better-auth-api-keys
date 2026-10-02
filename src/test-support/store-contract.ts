@@ -27,14 +27,14 @@ export function system(id: string): ApiKeyOwner {
   return { kind: "system", id };
 }
 
-/** The keys `store` lists for `owner`, failing the test if any row is malformed: no store under the contract suite holds one. */
+/** The keys `store` lists for `owner`, failing the test if any row is corrupt: no store under the contract suite holds one. */
 export async function listedKeys(
   store: Readonly<ApiKeyStore>,
   owner: ApiKeyOwner,
 ): Promise<StoredApiKey[]> {
   return (await store.listByOwner(owner)).map((listing) => {
     if (listing.outcome !== "stored") {
-      throw new Error(`Key ${listing.id} is malformed`);
+      throw new Error(`Key ${listing.id} is corrupt`);
     }
 
     return listing.key;
