@@ -61,7 +61,7 @@ async function addUser(
 }
 
 const createInput = {
-  owner: { id: "alice" },
+  owner: { kind: "user", id: "alice" },
   name: "deploys",
   lifetimeMs: DAY_MS,
   scopes: { access: "read" },

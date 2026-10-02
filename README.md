@@ -46,7 +46,7 @@ if (result.outcome === "valid") {
 }
 ```
 
-An owner given as `{ id }` with no `kind` is a person, so every call written before system principals existed means what it did. Any other `kind` is refused, never read as a person. A name is unique per owner, and `revoke` with an owner deletes the key only if that owner, of the same kind, holds it. `verify` and `list` report `owner` alongside `ownerId`, which repeats `owner.id` for code that predates principals: a host that creates system keys must check `owner.kind` before treating `ownerId` as a person's id.
+Every owner names its kind: `{ kind: "user", id }` for a person, `{ kind: "system", id }` for a principal. An owner with no `kind`, or any other, is refused (`create` reports the owner as invalid; `list`, `revoke` and `revokeAllForOwner` throw), never read as a person, so a principal's id passed without its kind can never list or revoke a person's keys. A name is unique per owner, and `revoke` with an owner deletes the key only if that owner, of the same kind, holds it. `verify` and `list` report `owner` alongside `ownerId`, which repeats `owner.id` for code that predates principals: a host that creates system keys must check `owner.kind` before treating `ownerId` as a person's id.
 
 `createdBy` records who created a key as plain text with no reference, so removing that person changes nothing about the key; it is for the host to show, and the host's own audit log remains the record of who did what.
 
@@ -162,7 +162,7 @@ export const apiKey = sqliteTable(
 );
 ```
 
-The code changes are small. Existing calls keep their meaning, but three types widen: `expiresAt` is `Date | null`, `create`'s `lifetimeMs` accepts `null`, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner`, `createdBy` and a nullable `expiresAt`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
+Every owner the host passes to the service needs its `kind` now: 0.1.0's `{ id }` is refused, so each call site says `{ kind: "user", id }` for a person. Three types widen: `expiresAt` is `Date | null`, `create`'s `lifetimeMs` accepts `null`, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner`, `createdBy` and a nullable `expiresAt`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
 
 ## Entry points
 
