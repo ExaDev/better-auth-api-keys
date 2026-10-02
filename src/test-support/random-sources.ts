@@ -12,6 +12,7 @@ export function scriptedRandomSource(
 } {
   let next = 0;
   const requests: number[] = [];
+
   return {
     version: API_KEYS_CONTRACT_VERSION,
     requests,
@@ -23,6 +24,7 @@ export function scriptedRandomSource(
         }
         const bytes = Uint8Array.from(script.slice(next, next + length));
         next += length;
+
         return bytes;
       }),
   };
@@ -46,8 +48,10 @@ export function seededRandomSource(seed: number): RandomSource {
     mixed ^=
       mixed +
       Math.imul(mixed ^ (mixed >>> MULBERRY32_MIX_B), mixed | MULBERRY32_MIX_D);
+
     return ((mixed ^ (mixed >>> MULBERRY32_MIX_C)) >>> 0) & BYTE_MASK;
   };
+
   return {
     version: API_KEYS_CONTRACT_VERSION,
     bytes: async (length, options) =>

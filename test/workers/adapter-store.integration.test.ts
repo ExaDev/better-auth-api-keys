@@ -21,6 +21,7 @@ describeApiKeyStoreContract(
   async () => {
     await resetDatabase();
     const context = await d1Auth(testPlugin()).$context;
+
     return {
       store: createAdapterApiKeyStore(() => context.adapter),
       addOwner: addUser,

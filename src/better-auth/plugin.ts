@@ -112,12 +112,14 @@ export function apiKeys<
         authoriser: options.authoriser,
       });
       created.set(service, service);
+
       return { context: { [SERVICE_CONTEXT_KEY]: service } };
     },
     [resolveService](context) {
       if (!(SERVICE_CONTEXT_KEY in context)) return undefined;
       const candidate = context[SERVICE_CONTEXT_KEY];
       if (typeof candidate !== "object" || candidate === null) return undefined;
+
       return created.get(candidate);
     },
   };
@@ -136,5 +138,6 @@ export function apiKeysOf<Scopes, Claims, Request>(
       `The ${API_KEYS_PLUGIN_ID} plugin is not registered on this better-auth instance`,
     );
   }
+
   return service;
 }

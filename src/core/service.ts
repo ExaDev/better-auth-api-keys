@@ -209,6 +209,7 @@ export function createApiKeyService<
     const scopes = z.safeParse(options.scopes, stored.scopes);
     const claims = z.safeParse(options.claims, stored.claims);
     if (!scopes.success || !claims.success) return undefined;
+
     return { ...summaryOf(stored), scopes: scopes.data, claims: claims.data };
   }
 
@@ -242,6 +243,7 @@ export function createApiKeyService<
       };
       const inserted = await store.insert(stored, callOptions);
       if (inserted.outcome === "name-taken") return { outcome: "name-taken" };
+
       return {
         outcome: "created",
         key: { ...summaryOf(stored), scopes: scopes.data, claims: claims.data },
@@ -252,6 +254,7 @@ export function createApiKeyService<
     async list(owner, callOptions) {
       callOptions?.signal?.throwIfAborted();
       const stored = await store.listByOwner(owner.id, callOptions);
+
       return [...stored]
         .sort(
           (a, b) =>
@@ -260,6 +263,7 @@ export function createApiKeyService<
         )
         .map((entry): ListedApiKey<Scopes, Claims> => {
           const key = readable(entry);
+
           return key === undefined
             ? { status: "unreadable", key: summaryOf(entry) }
             : { status: "valid", key };
@@ -272,6 +276,7 @@ export function createApiKeyService<
         { id: target.id, ownerId: target.owner?.id },
         callOptions,
       );
+
       return deleted.outcome === "deleted"
         ? { outcome: "revoked" }
         : { outcome: "not-found" };
@@ -280,6 +285,7 @@ export function createApiKeyService<
     async revokeAllForOwner(owner, callOptions) {
       callOptions?.signal?.throwIfAborted();
       const { deleted } = await store.deleteByOwner(owner.id, callOptions);
+
       return { revoked: deleted };
     },
 
@@ -303,6 +309,7 @@ export function createApiKeyService<
           createdAt: key.createdAt,
         };
       }
+
       return { outcome: "valid", key };
     },
 
@@ -315,6 +322,7 @@ export function createApiKeyService<
         return { outcome: "not-due" };
       }
       defer(store.touchLastUsed(key.id, now, notSince));
+
       return { outcome: "scheduled" };
     },
 

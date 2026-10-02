@@ -12,6 +12,7 @@ export interface ManualClock extends Clock {
 /** A {@link ManualClock} starting at `start`, which only moves when told to. */
 export function createManualClock(start: Date): ManualClock {
   let current = start.getTime();
+
   return {
     version: API_KEYS_CONTRACT_VERSION,
     async now(options) {

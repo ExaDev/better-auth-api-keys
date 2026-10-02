@@ -51,6 +51,7 @@ function input(
 function abortedSignal(): AbortSignal {
   const controller = new AbortController();
   controller.abort(new Error("aborted by the test"));
+
   return controller.signal;
 }
 
@@ -293,6 +294,7 @@ describe("ApiKeyService.recordUse", () => {
     if (verified.outcome === "valid") {
       await service.recordUse(verified.key, { defer });
     }
+
     return verified;
   }
 

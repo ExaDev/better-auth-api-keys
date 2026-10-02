@@ -9,6 +9,7 @@ const KEY_BYTES = 32;
 function abortedSignal(): AbortSignal {
   const controller = new AbortController();
   controller.abort(new Error("aborted by the test"));
+
   return controller.signal;
 }
 
