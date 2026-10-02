@@ -368,7 +368,7 @@ describe("ApiKeyService.list", () => {
     const listed = await service.list(alice);
     expect(
       listed.map((entry) =>
-        entry.status === "malformed"
+        entry.status === "corrupt"
           ? [entry.status, entry.id]
           : [entry.status, entry.key.name],
       ),
@@ -403,16 +403,16 @@ describe("ApiKeyService.list", () => {
   });
 });
 
-describe("ApiKeyService.list with malformed rows", () => {
-  it("lists malformed rows after the readable keys, by id, under the owner they were listed for", async () => {
+describe("ApiKeyService.list with corrupt rows", () => {
+  it("lists corrupt rows after the readable keys, by id, under the owner they were listed for", async () => {
     const inner = createInMemoryApiKeyStore();
     const { service } = serviceFixture({
       store: {
         ...inner,
         listByOwner: async (owner, options) => [
-          { outcome: "malformed", id: "b" },
+          { outcome: "corrupt", id: "b" },
           ...(await inner.listByOwner(owner, options)),
-          { outcome: "malformed", id: "a" },
+          { outcome: "corrupt", id: "a" },
         ],
       },
     });
@@ -420,8 +420,8 @@ describe("ApiKeyService.list with malformed rows", () => {
     if (created.outcome !== "created") throw new Error(created.outcome);
     expect(await service.list(alice)).toEqual([
       { status: "valid", key: created.key },
-      { status: "malformed", id: "a", owner: alice },
-      { status: "malformed", id: "b", owner: alice },
+      { status: "corrupt", id: "a", owner: alice },
+      { status: "corrupt", id: "b", owner: alice },
     ]);
   });
 });
