@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      alias_tag:
+        description: "A release tag (for example v1.2.3) to publish under every name in .github/npm-aliases.json, for a release whose alias jobs never ran or failed. Leave empty for a normal CI run."
+        required: false
+        type: string
 
 # A newer push to a pull request supersedes that pull request's run. A push to main never cancels: the release job pushes a release commit and a tag and publishes mid-run, and cancelling it partway would leave a release half made.
 concurrency:
@@ -169,6 +174,9 @@ jobs:
       issues: write # to comment on released issues, and open one when a release fails
       pull-requests: write # to comment on released pull requests
       id-token: write # the OIDC identity npm trusted publishing exchanges for a publish token, so there is no NPM_TOKEN
+    outputs:
+      # The publish-alias matrix for what this run released, [] when it released nothing.
+      aliases: ${{ steps.aliases.outputs.matrix }}
     steps:
       # main's ruleset requires every change to land through a pull request, and the workflow's own GITHUB_TOKEN is not one of its bypass actors. The release commit is a direct push to main, so it is pushed with a token from the org-wide "exadev" GitHub App, an Integration bypass actor on that ruleset.
       - name: Generate a token for the release push
@@ -192,6 +200,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Upgrade npm for trusted publishing (npm 11.5.1 or later)
         run: npm install -g npm@latest
+      - name: Read the version before releasing
+        id: before
+        run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
       - name: Release
         # HUSKY=0 so the commit-msg hook never runs against the release commit.
         run: HUSKY=0 pnpm exec semantic-release
@@ -201,3 +212,150 @@ jobs:
           # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would be used in preference to the OIDC exchange.
           NPM_TOKEN: ""
           NODE_AUTH_TOKEN: ""
+      - name: Plan the alias publishes for this release
+        id: aliases
+        env:
+          BEFORE: ${{ steps.before.outputs.version }}
+        # A release bumps package.json's version and leaves HEAD on the release commit it tagged, so an unchanged version means nothing was released, and otherwise the tag on HEAD is the release.
+        run: |
+          if [ "$(jq -r .version package.json)" = "$BEFORE" ]; then
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=$(node .github/scripts/alias-plan.ts "$(git describe --exact-match --tags HEAD)")" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Backfills the aliases for a release that already exists, from the alias_tag input of a manual run: for a release made before an alias was listed, or whose alias jobs failed. It only plans; publish-alias below does the publishing, with the same checks as after a release.
+  plan-alias-backfill:
+    name: Plan alias backfill
+    if: github.event_name == 'workflow_dispatch' && inputs.alias_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      aliases: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Every tag, so the input can be checked against the tags that exist.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+      - name: Plan the alias publishes for the tag
+        id: plan
+        env:
+          # Through the environment, not interpolated into the script, so the input is only ever data.
+          TAG: ${{ inputs.alias_tag }}
+        run: echo "matrix=$(node .github/scripts/alias-plan.ts "$TAG")" >> "$GITHUB_OUTPUT"
+      - name: Confirm the tag's version is the primary package's latest release
+        env:
+          MATRIX: ${{ steps.plan.outputs.matrix }}
+        # An alias publish moves the alias's latest dist-tag, so backfilling anything but the primary's latest release would leave an alias's latest behind the primary's.
+        run: |
+          PRIMARY=$(echo "$MATRIX" | jq -r '.[0].primary')
+          VERSION=$(echo "$MATRIX" | jq -r '.[0].version')
+          LATEST=$(npm view "$PRIMARY" dist-tags.latest)
+          if [ "$LATEST" != "$VERSION" ]; then
+            echo "::error::$PRIMARY's latest release is $LATEST, not $VERSION; backfill the aliases with the tag of $LATEST instead."
+            exit 1
+          fi
+
+  # Publishes each release under every name in .github/npm-aliases.json, as well as the scoped primary the Release job published: one leg per alias, all in parallel, each failing on its own without stopping the others. Nothing depends on these jobs, so a failed alias can never fail the release, and it shows as its own red job. Each leg checks out the release tag rather than main, builds it, and refuses to publish unless the tarball it packed matches the primary's published tarball in every file and every package.json field apart from the name and description, so an alias is always the primary's release under another name.
+  publish-alias:
+    name: Publish alias (${{ matrix.alias }})
+    needs: [release, plan-alias-backfill]
+    # Exactly one of the two jobs runs for a given trigger, so always() is what lets this job run after the other one is skipped. The [] test is load-bearing: an empty include list is an invalid matrix, which fails the run, rather than a skipped job.
+    if: always() && (needs.release.result == 'success' || needs.plan-alias-backfill.result == 'success') && (needs.release.outputs.aliases || needs.plan-alias-backfill.outputs.aliases) != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # the OIDC identity npm trusted publishing exchanges for a publish token; each alias name has its own trusted publisher
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.release.outputs.aliases || needs.plan-alias-backfill.outputs.aliases) }}
+    env:
+      ALIAS: ${{ matrix.alias }}
+      PRIMARY: ${{ matrix.primary }}
+      VERSION: ${{ matrix.version }}
+      TAG: ${{ matrix.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The release commit the tag names, never main's moving tip, which a later release may already have moved on.
+          ref: ${{ matrix.tag }}
+      - name: Confirm the checkout is the tagged release
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$TAG^{commit}")" ]; then
+            echo "::error::The checkout is not the commit $TAG names."
+            exit 1
+          fi
+          if [ "$(jq -r .name package.json)" != "$PRIMARY" ] || [ "$(jq -r .version package.json)" != "$VERSION" ]; then
+            echo "::error::$TAG's package.json is $(jq -r '.name + "@" + .version' package.json), not $PRIMARY@$VERSION."
+            exit 1
+          fi
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+          # No registry-url: it writes an .npmrc with an _authToken line, which wins over the OIDC token exchange and stops trusted publishing working.
+      - name: Upgrade npm for trusted publishing (npm 11.5.1 or later)
+        run: npm install -g npm@latest
+      - name: Check whether the alias already has this version
+        id: existing
+        # npm refuses to publish a version twice, so a version the alias already has (a re-run, or a backfill of a version already published) is done, not failed. npm view fails the step for a name that is not on npm, since a trusted publisher can only be registered for a name that exists.
+        run: |
+          VERSIONS=$(npm view "$ALIAS" versions --json)
+          if echo "$VERSIONS" | jq -e --arg version "$VERSION" 'index($version) != null' > /dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$ALIAS@$VERSION is already published."
+          fi
+      - if: steps.existing.outputs.published != 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.existing.outputs.published != 'true'
+        run: pnpm build
+      - name: Rename the package to the alias
+        if: steps.existing.outputs.published != 'true'
+        # Rewriting the checked-out package.json rather than keeping one per alias means an alias can never drift from the primary's metadata. The description, which npm shows under the name and in search results, says which package this is an alias of; the README is left as it is, and already names the primary in its title and install command.
+        run: |
+          npm pkg set name="$ALIAS"
+          npm pkg set description="An alias of $PRIMARY, published from the same release. $(jq -r .description package.json)"
+      - name: Pack the alias and check it against the primary's published tarball
+        id: pack
+        if: steps.existing.outputs.published != 'true'
+        run: |
+          PACK_DIR="$RUNNER_TEMP/alias-pack"
+          mkdir -p "$PACK_DIR/alias" "$PACK_DIR/primary"
+          # --ignore-scripts: the build is already done, and prepare would install git hooks into the runner's checkout.
+          TARBALL="$PACK_DIR/alias/$(npm pack --ignore-scripts --json --pack-destination "$PACK_DIR/alias" | jq -r '.[0].filename')"
+          PRIMARY_TARBALL="$PACK_DIR/primary/$(npm pack "$PRIMARY@$VERSION" --json --pack-destination "$PACK_DIR/primary" | jq -r '.[0].filename')"
+          tar -xzf "$TARBALL" -C "$PACK_DIR/alias"
+          tar -xzf "$PRIMARY_TARBALL" -C "$PACK_DIR/primary"
+          if ! diff -r --exclude=package.json "$PACK_DIR/primary/package" "$PACK_DIR/alias/package"; then
+            echo "::error::$ALIAS's files differ from $PRIMARY@$VERSION's published files."
+            exit 1
+          fi
+          if ! diff <(jq -S 'del(.name, .description)' "$PACK_DIR/primary/package/package.json") <(jq -S 'del(.name, .description)' "$PACK_DIR/alias/package/package.json"); then
+            echo "::error::$ALIAS's package.json differs from $PRIMARY@$VERSION's in more than its name and description."
+            exit 1
+          fi
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+      - name: Publish the alias
+        id: publish
+        if: steps.existing.outputs.published != 'true'
+        # Publishes the tarball checked above, so what was compared is what ships. Trusted publishing attaches provenance.
+        run: npm publish "$TARBALL"
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would be used in preference to the OIDC exchange.
+          NPM_TOKEN: ""
+          NODE_AUTH_TOKEN: ""
+      - name: Explain a failed publish
+        if: failure() && steps.publish.outcome == 'failure'
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        # npm answers a publish with no trusted publisher registered for the name, or one that names another repository or workflow, with a 404, the same answer as for a name that does not exist.
+        run: |
+          WORKFLOW_PATH=${WORKFLOW_REF%@*}
+          echo "::error::Publishing $ALIAS@$VERSION failed. If npm answered 404, $ALIAS has no trusted publisher for this workflow yet; its owner registers one once with: npm trust github $ALIAS --file ${WORKFLOW_PATH##*/} --repo $GITHUB_REPOSITORY --allow-publish"
