@@ -14,6 +14,7 @@ import {
 } from "../../src/test-support/service-fixture.ts";
 import {
   describeApiKeyStoreContract,
+  listedKeys,
   storedKey,
   user,
 } from "../../src/test-support/store-contract.ts";
@@ -101,7 +102,7 @@ describe("the plugin on D1", () => {
       "inserted",
       "name-taken",
     ]);
-    expect(await store.listByOwner(user("alice"))).toHaveLength(1);
+    expect(await listedKeys(store, user("alice"))).toHaveLength(1);
   });
 
   it("deletes a person's keys with the person", async () => {
@@ -111,7 +112,7 @@ describe("the plugin on D1", () => {
     await env.DATABASE.prepare("DELETE FROM user WHERE id = ?")
       .bind("alice")
       .run();
-    expect(await store.listByOwner(user("alice"))).toEqual([]);
+    expect(await listedKeys(store, user("alice"))).toEqual([]);
   });
 
   it("deletes only the person's keys with the person: a system principal's keys, even one sharing the person's id, survive and still verify", async () => {

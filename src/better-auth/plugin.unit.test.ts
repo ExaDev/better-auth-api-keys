@@ -202,18 +202,62 @@ describe("the adapter store's owner invariant", () => {
       { ownerKind: "robot", ownerId: "alice", userId: null },
       undefined,
     ],
-  ])("refuses to read %s", async (_, row, listedBy) => {
-    const context = await authWith({ plugins: [testPlugin()] }).$context;
-    const store = createAdapterApiKeyStore(() => context.adapter);
-    const keyHash = await insertRow(context.adapter, row);
-    await expect(store.findByHash(keyHash)).rejects.toThrow(
-      "must be a person's key referencing that person",
-    );
-    if (listedBy !== undefined) {
-      await expect(store.listByOwner(listedBy)).rejects.toThrow(
+  ])(
+    "refuses to verify %s, and lists it as malformed beside the owner's readable keys",
+    async (_, row, listedBy) => {
+      const context = await authWith({ plugins: [testPlugin()] }).$context;
+      const store = createAdapterApiKeyStore(() => context.adapter);
+      const keyHash = await insertRow(context.adapter, row);
+      await expect(store.findByHash(keyHash)).rejects.toThrow(
         "must be a person's key referencing that person",
       );
-    }
+      if (listedBy !== undefined) {
+        const good = await insertRow(context.adapter, {
+          ...row,
+          ...(listedBy.kind === "user"
+            ? { ownerKind: "user", userId: listedBy.id }
+            : { ownerKind: "system", userId: null }),
+          ownerId: "alice",
+        });
+        const listings = await store.listByOwner(listedBy);
+        expect(listings).toHaveLength(2);
+        expect(listings).toContainEqual({ outcome: "malformed", id: keyHash });
+        expect(
+          listings.flatMap((listing) =>
+            listing.outcome === "stored" ? [listing.key.id] : [],
+          ),
+        ).toEqual([good]);
+      }
+    },
+  );
+
+  it("lists a row whose creator fails its schema as malformed, and the service lists it for revoking", async () => {
+    const plugin = testPlugin();
+    const context = await authWith({ plugins: [plugin] }).$context;
+    await addUser(context.adapter, "alice");
+    const service = apiKeysOf(context, plugin);
+    const created = await service.create(createInput);
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    const malformed = await insertRow(context.adapter, {
+      ownerKind: "user",
+      ownerId: "alice",
+      userId: "alice",
+    });
+    await context.adapter.updateMany({
+      model: API_KEY_MODEL,
+      where: [{ field: "id", value: malformed }],
+      update: { createdBy: "", expiresAt: new Date(1) },
+    });
+    expect(await service.list(user("alice"))).toEqual([
+      { status: "valid", key: created.key },
+      { status: "malformed", id: malformed, owner: user("alice") },
+    ]);
+    expect(
+      await service.revoke({ id: malformed, owner: user("alice") }),
+    ).toEqual({ outcome: "revoked" });
+    expect(await service.list(user("alice"))).toEqual([
+      { status: "valid", key: created.key },
+    ]);
   });
 
   it("reads a consistent row of either kind", async () => {

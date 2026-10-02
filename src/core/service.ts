@@ -123,10 +123,17 @@ export interface RecordApiKeyUseOptions extends PortCallOptions {
 export type RecordApiKeyUseResult =
   { readonly outcome: "scheduled" } | { readonly outcome: "not-due" };
 
-/** One entry of {@link ApiKeyService.list}. A key whose stored scopes or claims no longer pass the host's schemas, or that has no expiry the service would let it have, is listed as `unreadable` rather than hidden, so its owner can still see and revoke it. */
+/**
+ * One entry of {@link ApiKeyService.list}. A key whose stored scopes or claims no longer pass the host's schemas, or that has no expiry the service would let it have, is listed as `unreadable` with its summary rather than hidden, so its owner can still see and revoke it. A row the store could not read as a key at all is listed as `malformed`, with only its id and the owner it was listed for, since none of its other fields can be trusted; it too can be revoked by id.
+ */
 export type ListedApiKey<Scopes, Claims> =
   | { readonly status: "valid"; readonly key: ApiKey<Scopes, Claims> }
-  | { readonly status: "unreadable"; readonly key: ApiKeySummary };
+  | { readonly status: "unreadable"; readonly key: ApiKeySummary }
+  | {
+      readonly status: "malformed";
+      readonly id: string;
+      readonly owner: ApiKeyOwner;
+    };
 
 /** The result of {@link ApiKeyService.revoke}. */
 export type RevokeApiKeyResult =
@@ -139,7 +146,7 @@ export interface ApiKeyService<Scopes, Claims, Request> {
     input: CreateApiKeyInput<Scopes, Claims>,
     options?: PortCallOptions,
   ) => Promise<CreateApiKeyResult<Scopes, Claims>>;
-  /** Every key `owner` holds, newest first. Throws if `owner` is not an owner {@link apiKeyOwnerSchema} accepts. */
+  /** Every key `owner` holds, newest first, then any malformed rows by id. Throws if `owner` is not an owner {@link apiKeyOwnerSchema} accepts. */
   list: (
     owner: Readonly<ApiKeyOwner>,
     options?: PortCallOptions,
@@ -303,21 +310,37 @@ export function createApiKeyService<
 
     async list(owner, callOptions) {
       callOptions?.signal?.throwIfAborted();
-      const stored = await store.listByOwner(ownerOf(owner), callOptions);
+      const listedFor = ownerOf(owner);
+      const listings = await store.listByOwner(listedFor, callOptions);
+      const stored = listings.flatMap((listing) =>
+        listing.outcome === "stored" ? [listing.key] : [],
+      );
+      const malformed = listings.flatMap((listing) =>
+        listing.outcome === "malformed" ? [listing.id] : [],
+      );
 
-      return [...stored]
-        .sort(
-          (a, b) =>
-            b.createdAt.getTime() - a.createdAt.getTime() ||
-            a.id.localeCompare(b.id),
-        )
-        .map((entry): ListedApiKey<Scopes, Claims> => {
-          const key = readable(entry);
+      return [
+        ...[...stored]
+          .sort(
+            (a, b) =>
+              b.createdAt.getTime() - a.createdAt.getTime() ||
+              a.id.localeCompare(b.id),
+          )
+          .map((entry): ListedApiKey<Scopes, Claims> => {
+            const key = readable(entry);
 
-          return key === undefined
-            ? { status: "unreadable", key: summaryOf(entry) }
-            : { status: "valid", key };
-        });
+            return key === undefined
+              ? { status: "unreadable", key: summaryOf(entry) }
+              : { status: "valid", key };
+          }),
+        ...malformed
+          .sort((a, b) => a.localeCompare(b))
+          .map((id): ListedApiKey<Scopes, Claims> => ({
+            status: "malformed",
+            id,
+            owner: listedFor,
+          })),
+      ];
     },
 
     async revoke(target, callOptions) {

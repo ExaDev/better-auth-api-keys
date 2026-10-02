@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeApiKeyStoreContract,
+  listedKeys,
   storedKey,
   user,
 } from "../test-support/store-contract.ts";
@@ -26,7 +27,7 @@ describe("createInMemoryApiKeyStore", () => {
     if (found.outcome !== "found") throw new Error(found.outcome);
     expect(found.key.createdAt).not.toEqual(new Date(0));
     found.key.createdAt.setTime(0);
-    const [listed] = await store.listByOwner(user("owner"));
+    const [listed] = await listedKeys(store, user("owner"));
     expect(listed?.createdAt).not.toEqual(new Date(0));
   });
 

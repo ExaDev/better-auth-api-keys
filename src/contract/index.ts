@@ -22,6 +22,7 @@ export type {
   ApiKeyDeleteOutcome,
   ApiKeyFindOutcome,
   ApiKeyInsertOutcome,
+  ApiKeyListing,
   ApiKeyStore,
   ApiKeyTouchOutcome,
   AuthorisationDecision,
