@@ -336,7 +336,6 @@ describe("upgrading a 0.1.0 database", () => {
       key: {
         id: "old-key",
         owner: { kind: "user", id: "alice" },
-        ownerId: "alice",
         expiresAt: new Date(expiresAt),
       },
     });

@@ -108,7 +108,6 @@ describe("ApiKeyService.create", () => {
     expect(created.key).toEqual({
       id: created.key.id,
       owner: { kind: "user", id: "alice" },
-      ownerId: "alice",
       name: "deploys",
       start: created.plaintext.slice(
         0,
@@ -280,7 +279,6 @@ describe("ApiKeyService.verify", () => {
       outcome: "expired",
       id: created.key.id,
       owner: { kind: "user", id: "alice" },
-      ownerId: "alice",
       createdAt: created.key.createdAt,
     });
   });
@@ -409,7 +407,6 @@ describe("ApiKeyService.list", () => {
         key: {
           id: unreadable.id,
           owner: { kind: "user", id: "alice" },
-          ownerId: "alice",
           name: unreadable.name,
           start: unreadable.start,
           createdAt: unreadable.createdAt,
@@ -567,7 +564,6 @@ describe("system principals' keys", () => {
     if (created.outcome !== "created") throw new Error(created.outcome);
     expect(created.key).toMatchObject({
       owner: { kind: "system", id: "deployer" },
-      ownerId: "deployer",
       createdBy: "alice",
       expiresAt: new Date(TEST_START.getTime() + LIFETIME_MS),
     });
@@ -587,6 +583,9 @@ describe("system principals' keys", () => {
     if (owner.kind === "user") throw new Error("a person's key");
     expectTypeOf(owner).toEqualTypeOf<ApiKeySystemOwner>();
     expect(owner).toEqual(deployer);
+    // The owner's id is reachable only through owner, so no caller can take it without seeing its kind.
+    expectTypeOf(verified.key).not.toHaveProperty("ownerId");
+    expect(verified.key).not.toHaveProperty("ownerId");
     if (verified.key.owner.kind === "user") {
       expectTypeOf(verified.key.owner).toEqualTypeOf<ApiKeyUserOwner>();
     }
@@ -720,7 +719,6 @@ describe("system principals' keys", () => {
       outcome: "expired",
       id: created.key.id,
       owner: deployer,
-      ownerId: "deployer",
       createdAt: created.key.createdAt,
     });
   });

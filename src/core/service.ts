@@ -108,8 +108,6 @@ export type VerifyApiKeyResult<Scopes, Claims> =
       readonly outcome: "expired";
       readonly id: string;
       readonly owner: ApiKeyOwner;
-      /** Repeats `owner.id`, as {@link ApiKeySummary.ownerId} does. */
-      readonly ownerId: string;
       readonly createdAt: Date;
     };
 
@@ -184,7 +182,6 @@ function summaryOf(stored: StoredApiKey): ApiKeySummary {
   return {
     id: stored.id,
     owner: stored.owner,
-    ownerId: stored.owner.id,
     name: stored.name,
     start: stored.start,
     createdAt: stored.createdAt,
@@ -365,7 +362,6 @@ export function createApiKeyService<
           outcome: "expired",
           id: key.id,
           owner: key.owner,
-          ownerId: key.ownerId,
           createdAt: key.createdAt,
         };
       }

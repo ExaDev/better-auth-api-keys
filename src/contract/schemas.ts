@@ -67,15 +67,8 @@ export const storedApiKeySchema = z.object({
 });
 export type StoredApiKey = z.output<typeof storedApiKeySchema>;
 
-/**
- * What a person sees of a key: everything but its hash, scopes and claims. `ownerId` repeats `owner.id`, so code written before system principals existed reads unchanged; a host that creates system keys must branch on `owner.kind` before treating `ownerId` as a person's id.
- */
-export type ApiKeySummary = Omit<
-  StoredApiKey,
-  "keyHash" | "scopes" | "claims"
-> & {
-  readonly ownerId: string;
-};
+/** What a person sees of a key: everything but its hash, scopes and claims. Its owner is `owner`, whose `kind` the host must check before looking the owner up: a principal's id may equal a person's. */
+export type ApiKeySummary = Omit<StoredApiKey, "keyHash" | "scopes" | "claims">;
 
 /** A key whose scopes and claims have passed the host's schemas, typed by them. */
 export type ApiKey<Scopes, Claims> = ApiKeySummary & {
