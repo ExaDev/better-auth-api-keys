@@ -1,0 +1,16 @@
+# A single-package repository, not a real pnpm workspace: packages is deliberately empty. The file exists for the settings below, which pnpm reads only from here, and to give turbo a workspace root to cache tasks against.
+packages: []
+
+# A decision recorded, not merely a permission granted: each entry names exactly why that package's install script is safe to run, so a new dependency never gets a free pass by inheriting an existing allowlist entry it has nothing to do with.
+allowBuilds:
+  esbuild: true # ships a real prebuilt native binary; a transitive dependency of vitest, tsdown and wrangler
+  workerd: true # the Cloudflare Workers runtime binary, needed for test:workers
+
+# A week, in minutes: a release this new has not yet had the time in which compromised releases are usually caught and pulled. Set here, not only in a contributor's own pnpm configuration, so CI resolves under the same policy.
+minimumReleaseAge: 10080
+
+# ExaDev's own packages: the release-age wait guards against a compromised third-party release, which doesn't apply to a package ExaDev publishes itself. pnpm checks even a frozen lockfile against the policy, so CI needs this as much as a local install does.
+minimumReleaseAgeExclude:
+  - "@exadev/eslint-config"
+
+saveExact: true

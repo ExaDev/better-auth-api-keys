@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2024", "WebWorker"],
     "types": [
@@ -8,5 +8,10 @@
       "@cloudflare/vitest-pool-workers/types"
     ]
   },
-  "include": ["*.config.ts", "test/**/*.ts"]
+  "include": [
+    "*.config.ts",
+    "commit-types.ts",
+    "test/**/*.ts",
+    ".github/scripts/**/*.ts"
+  ]
 }
