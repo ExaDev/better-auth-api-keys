@@ -239,8 +239,8 @@ importers:
         specifier: 1.7.5
         version: 1.7.5(drizzle-orm@1.0.0-rc.4(@cloudflare/workers-types@5.20260918.1)(zod@4.6.5))(vitest@4.1.11)
       conventional-changelog-conventionalcommits:
-        specifier: 10.4.0
-        version: 10.4.0
+        specifier: 9.3.1
+        version: 9.3.1
       drizzle-orm:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4(@cloudflare/workers-types@5.20260918.1)(zod@4.6.5)
@@ -2564,6 +2564,10 @@ packages:
   conventional-changelog-conventionalcommits@10.4.0:
     resolution: {integrity: sha512-Rriac6ZrAlVm6cy9Bz4NSp+WMHpwNXoPIYex+HjCgduAVUSbnew29DQjQw0C4g9u3HtSYzGiGY+pdBXAZo+4aA==}
     engines: {node: '>=22'}
+
+  conventional-changelog-conventionalcommits@9.3.1:
+    resolution: {integrity: sha512-dTYtpIacRpcZgrvBYvBfArMmK2xvIpv2TaxM0/ZI5CBtNUzvF2x0t15HsbRABWprS6UPmvj+PzHVjSx4qAVKyw==}
+    engines: {node: '>=18'}
 
   conventional-changelog-writer@8.4.0:
     resolution: {integrity: sha512-HHBFkk1EECxxmCi4CTu091iuDpQv5/OavuCUAuZmrkWpmYfyD816nom1CvtfXJ/uYfAAjavgHvXHX291tSLK8g==}
@@ -7017,6 +7021,10 @@ snapshots:
   conventional-changelog-conventionalcommits@10.4.0:
     dependencies:
       '@conventional-changelog/template': 1.4.0
+
+  conventional-changelog-conventionalcommits@9.3.1:
+    dependencies:
+      compare-func: 2.0.0
 
   conventional-changelog-writer@8.4.0:
     dependencies:

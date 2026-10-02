@@ -105,7 +105,7 @@
     "@types/node": "26.5.1",
     "@vitest/coverage-v8": "4.1.11",
     "better-auth": "1.7.5",
-    "conventional-changelog-conventionalcommits": "10.4.0",
+    "conventional-changelog-conventionalcommits": "9.3.1",
     "drizzle-orm": "1.0.0-rc.4",
     "eslint": "10.10.0",
     "eslint-config-prettier": "10.1.8",
