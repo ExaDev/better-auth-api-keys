@@ -36,6 +36,7 @@ const created = await service.create({
   lifetimeMs: 365 * DAY_MS, // or null, when allowNonExpiringSystemKeys is set
   scopes,
   claims,
+  createdBy: session.user.id, // optional, stored as plain text
 });
 
 const result = await service.verify(presentedKey, { signal: request.signal });
@@ -46,6 +47,8 @@ if (result.outcome === "valid") {
 ```
 
 An owner given as `{ id }` with no `kind` is a person, so every call written before system principals existed means what it did. Any other `kind` is refused, never read as a person. A name is unique per owner, and `revoke` with an owner deletes the key only if that owner, of the same kind, holds it. `verify` and `list` report `owner` alongside `ownerId`, which repeats `owner.id` for code that predates principals: a host that creates system keys must check `owner.kind` before treating `ownerId` as a person's id.
+
+`createdBy` records who created a key as plain text with no reference, so removing that person changes nothing about the key; it is for the host to show, and the host's own audit log remains the record of who did what.
 
 **Deleting a principal is the host's job.** Deleting a person deletes their keys through the database's cascade, and leaves every system key alone. Nothing references a principal, so the package cannot cascade when one goes: the host's own principal deletion must call `service.revokeAllForOwner({ kind: "system", id })`, in the same operation where it can, or the principal's keys go on verifying for an owner the host no longer has. A host that looks the principal up on every request refuses them anyway, but should not rely on that alone.
 
@@ -86,7 +89,7 @@ if (result.outcome === "valid" /* and the host's own checks accept it */) {
 }
 ```
 
-The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"` or `"system"`) and `ownerId`; a nullable `userId` referencing `user.id` with cascading delete, set (to `ownerId`) only for a person's key, and indexed for that delete; `name`; `keyHash` unique; `start`; `scopes` and `claims` as JSON; `createdAt`; a nullable `expiresAt` (null only for a system key with no expiry); and an unindexed nullable `lastUsedAt`; with `(ownerKind, ownerId, name)` unique. The owner is two required columns rather than a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a nullable column (SQL Server and MongoDB treat nulls in a unique index as equal), and a name must be unique per owner. Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
+The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"` or `"system"`) and `ownerId`; a nullable `userId` referencing `user.id` with cascading delete, set (to `ownerId`) only for a person's key, and indexed for that delete; `name`; `keyHash` unique; `start`; `scopes` and `claims` as JSON; `createdAt`; a nullable `expiresAt` (null only for a system key with no expiry); a nullable plain-text `createdBy`; and an unindexed nullable `lastUsedAt`; with `(ownerKind, ownerId, name)` unique. The owner is two required columns rather than a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a nullable column (SQL Server and MongoDB treat nulls in a unique index as equal), and a name must be unique per owner. Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
 
 better-auth's schema cannot express a check across columns, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` does not agree with its owner, and the service refuses a person's key with no expiry whatever the database holds. A host's own migration should add the same rule as a check constraint, as the SQLite one below does.
 
@@ -107,6 +110,7 @@ CREATE TABLE api_key_new (
   claims text NOT NULL,
   created_at integer NOT NULL,
   expires_at integer,
+  created_by text,
   last_used_at integer,
   CONSTRAINT api_key_owner CHECK (
     (owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL)
@@ -121,7 +125,7 @@ CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
 CREATE INDEX api_key_user_id ON api_key (user_id);
 ```
 
-Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
+Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), `created_by`, make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
 
 The Drizzle declaration matching the migration:
 
@@ -140,6 +144,7 @@ export const apiKey = sqliteTable(
     claims: text().notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+    createdBy: text("created_by"),
     lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
   },
   (table) => [
@@ -157,7 +162,7 @@ export const apiKey = sqliteTable(
 );
 ```
 
-The code changes are small. Existing calls keep their meaning, but three types widen: `expiresAt` is `Date | null`, `create`'s `lifetimeMs` accepts `null`, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner` and a nullable `expiresAt`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
+The code changes are small. Existing calls keep their meaning, but three types widen: `expiresAt` is `Date | null`, `create`'s `lifetimeMs` accepts `null`, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner`, `createdBy` and a nullable `expiresAt`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
 
 ## Entry points
 

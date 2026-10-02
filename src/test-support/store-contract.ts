@@ -229,8 +229,11 @@ export function describeApiKeyStoreContract(
       });
     });
 
-    it("finds a system principal's key with no expiry, every field intact", async () => {
-      const key = storedKey(system("deployer"), { expiresAt: null });
+    it("finds a system principal's key with no expiry and its creator, every field intact", async () => {
+      const key = storedKey(system("deployer"), {
+        expiresAt: null,
+        createdBy: "owner-a",
+      });
       expect(await store.insert(key)).toEqual({ outcome: "inserted" });
       expect(await store.findByHash(key.keyHash)).toEqual({
         outcome: "found",

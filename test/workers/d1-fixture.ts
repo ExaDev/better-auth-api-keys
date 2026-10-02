@@ -105,6 +105,7 @@ const apiKey = sqliteTable(
     claims: text().notNull(),
     createdAt: timestamp("created_at").notNull(),
     expiresAt: timestamp("expires_at"),
+    createdBy: text("created_by"),
     lastUsedAt: timestamp("last_used_at"),
   },
   (table) => [
@@ -142,7 +143,7 @@ const API_KEY_INDEXES = [
 
 /** The `api_key` table as {@link apiKey} declares it. */
 const API_KEY_TABLE = [
-  `CREATE TABLE api_key (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
+  `CREATE TABLE api_key (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, created_by text, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
   ...API_KEY_INDEXES,
 ];
 
@@ -154,7 +155,7 @@ const V0_1_0_API_KEY_TABLE = [
 
 /** The README's migration from 0.1.0, statement for statement: SQLite cannot relax `NOT NULL` in place, so the table is rebuilt and its rows copied across. Nothing references `api_key`, so dropping the old table needs no foreign-key pragma. */
 const MIGRATION_FROM_V0_1_0 = [
-  `CREATE TABLE api_key_new (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
+  `CREATE TABLE api_key_new (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer, created_by text, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id AND expires_at IS NOT NULL) OR (owner_kind = 'system' AND user_id IS NULL)))`,
   "INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at) SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key",
   "DROP TABLE api_key",
   "ALTER TABLE api_key_new RENAME TO api_key",

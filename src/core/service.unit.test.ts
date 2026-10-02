@@ -118,6 +118,7 @@ describe("ApiKeyService.create", () => {
       claims: { provider: "google" },
       createdAt: TEST_START,
       expiresAt: new Date(TEST_START.getTime() + LIFETIME_MS),
+      createdBy: undefined,
       lastUsedAt: undefined,
     });
     expect(created.key.id).toMatch(
@@ -558,13 +559,16 @@ describe("abort signals", () => {
 });
 
 describe("system principals' keys", () => {
-  it("creates a key owned by a system principal, and verifies it with its owner's kind", async () => {
+  it("creates a key owned by a system principal, recording who created it, and verifies it with its owner's kind", async () => {
     const { service, store } = serviceFixture();
-    const created = await service.create(input({ owner: deployer }));
+    const created = await service.create(
+      input({ owner: deployer, createdBy: "alice" }),
+    );
     if (created.outcome !== "created") throw new Error(created.outcome);
     expect(created.key).toMatchObject({
       owner: { kind: "system", id: "deployer" },
       ownerId: "deployer",
+      createdBy: "alice",
       expiresAt: new Date(TEST_START.getTime() + LIFETIME_MS),
     });
     expect(await store.listByOwner(system("deployer"))).toHaveLength(1);
@@ -617,6 +621,14 @@ describe("system principals' keys", () => {
     await expect(service.revoke({ id: "any", owner })).rejects.toThrow();
     // @ts-expect-error as above
     await expect(service.revokeAllForOwner(owner)).rejects.toThrow();
+  });
+
+  it("refuses an empty creator", async () => {
+    const { service } = serviceFixture();
+    expect(await service.create(input({ createdBy: "" }))).toEqual({
+      outcome: "invalid",
+      field: "createdBy",
+    });
   });
 
   it("keeps names unique per owner: a person and a principal with the same id may each use a name once", async () => {

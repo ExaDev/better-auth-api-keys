@@ -171,6 +171,7 @@ describe("the adapter store's owner invariant", () => {
         claims: { provider: "google" },
         createdAt: new Date(0),
         expiresAt: null,
+        createdBy: null,
         lastUsedAt: null,
       },
       forceAllowId: true,
@@ -250,6 +251,7 @@ describe("the adapter store's owner invariant", () => {
       ...createInput,
       owner: { kind: "system", id: "alice" },
       lifetimeMs: null,
+      createdBy: "alice",
     });
     const persons = await service.create(createInput);
     if (principals.outcome !== "created" || persons.outcome !== "created") {
@@ -264,12 +266,14 @@ describe("the adapter store's owner invariant", () => {
           ownerId: "alice",
           userId: null,
           expiresAt: null,
+          createdBy: "alice",
         }),
         expect.objectContaining({
           id: persons.key.id,
           ownerKind: "user",
           ownerId: "alice",
           userId: "alice",
+          createdBy: null,
         }),
       ]),
     );
@@ -307,6 +311,7 @@ describe("apiKeySchema", () => {
           claims: { type: "json", required: true },
           createdAt: { type: "date", required: true },
           expiresAt: { type: "date", required: false },
+          createdBy: { type: "string", required: false },
           lastUsedAt: { type: "date", required: false },
         },
         indexes: [
