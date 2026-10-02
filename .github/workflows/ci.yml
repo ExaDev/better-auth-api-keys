@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to a pull request supersedes that pull request's run. A push to main never cancels: the release job pushes a release commit and a tag and publishes mid-run, and cancelling it partway would leave a release half made.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Commitlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate the last commit
+        if: github.event_name != 'pull_request'
+        run: pnpm exec commitlint --last --verbose
+      - name: Validate every commit in the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Without --fix, so a file the formatter would rewrite fails here rather than being fixed in a checkout nobody commits.
+      - run: pnpm exec eslint . --max-warnings 0
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  # Each test job runs three times: on the lockfile's versions, and with every peer (zod, better-auth, @better-auth/core) installed at the lowest and at the newest version its range in package.json admits, so a peer range never claims a version the tests have not run on. The ranges are read from package.json, so this list never restates them.
+  test:
+    name: Test (${{ matrix.peers }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        peers: [lockfile, floor, latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install every peer at the ${{ matrix.peers }} of its range
+        if: matrix.peers != 'lockfile'
+        env:
+          PEERS: ${{ matrix.peers }}
+        run: pnpm add -D $(node .github/scripts/peer-specifiers.ts "$PEERS")
+      - run: pnpm test:coverage
+
+  test-workers:
+    name: Workers test (${{ matrix.peers }})
+    # workerd ships no linux-arm64 build, so this stays on GitHub's x64 runners.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        peers: [lockfile, floor, latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install every peer at the ${{ matrix.peers }} of its range
+        if: matrix.peers != 'lockfile'
+        env:
+          PEERS: ${{ matrix.peers }}
+        run: pnpm add -D $(node .github/scripts/peer-specifiers.ts "$PEERS")
+      - run: pnpm test:workers
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec publint
+      # esm-only: the package publishes no CommonJS build, so a require() from node10 or CommonJS resolution is not a supported way to load it.
+      - run: pnpm exec attw --pack --profile esm-only
+
+  # The one check main's ruleset requires: it stands for every job above, including each leg of the matrices, whose own check names change with the matrix.
+  required-checks:
+    name: Required Checks
+    needs: [commitlint, lint, typecheck, test, test-workers, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm every required job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "A required job finished as $result: $RESULTS"
+              exit 1
+            fi
+          done
+
+  release:
+    name: Release
+    needs: [required-checks]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Two pushes to main close together must never release at the same time; the second waits rather than cancelling the first mid-publish.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # to push the release commit and tag, and create the GitHub Release
+      issues: write # to comment on released issues, and open one when a release fails
+      pull-requests: write # to comment on released pull requests
+      id-token: write # the OIDC identity npm trusted publishing exchanges for a publish token, so there is no NPM_TOKEN
+    steps:
+      # main's ruleset requires every change to land through a pull request, and the workflow's own GITHUB_TOKEN is not one of its bypass actors. The release commit is a direct push to main, so it is pushed with a token from the org-wide "exadev" GitHub App, an Integration bypass actor on that ruleset.
+      - name: Generate a token for the release push
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: Iv23liLMzahHqi38Qo4c
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v7
+        with:
+          # semantic-release analyses every commit since the last tag, and pushes to the branch by name, so it needs the full history on main rather than a detached commit.
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+          # No registry-url: it writes an .npmrc with an _authToken line, which wins over the OIDC token exchange and stops trusted publishing working.
+      - run: pnpm install --frozen-lockfile
+      - name: Upgrade npm for trusted publishing (npm 11.5.1 or later)
+        run: npm install -g npm@latest
+      - name: Release
+        # HUSKY=0 so the commit-msg hook never runs against the release commit.
+        run: HUSKY=0 pnpm exec semantic-release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Blanked, not omitted: an inherited NPM_TOKEN or NODE_AUTH_TOKEN would be used in preference to the OIDC exchange.
+          NPM_TOKEN: ""
+          NODE_AUTH_TOKEN: ""
