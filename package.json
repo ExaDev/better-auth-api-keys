@@ -1,6 +1,6 @@
 {
   "name": "@exadev/better-auth-api-keys",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A better-auth plugin for long-lived API keys: checksummed keys checked offline, stored only as a peppered HMAC, found with one indexed lookup, with a throttled last-used write and no session hook.",
   "keywords": [
     "better-auth",
