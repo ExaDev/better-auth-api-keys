@@ -4,13 +4,30 @@ import {
   apiKeysOf,
   createAdapterApiKeyStore,
 } from "../../src/better-auth/index.ts";
-import { DAY_MS } from "../../src/test-support/service-fixture.ts";
+import { generateKey, keyStart } from "../../src/core/index.ts";
+import { seededRandomSource } from "../../src/test-support/random-sources.ts";
+import {
+  DAY_MS,
+  TEST_PREFIX,
+  TEST_START,
+} from "../../src/test-support/service-fixture.ts";
 import {
   describeApiKeyStoreContract,
   storedKey,
+  user,
 } from "../../src/test-support/store-contract.ts";
-import { testPlugin } from "../../src/test-support/plugin-fixture.ts";
-import { addUser, d1Auth, resetDatabase } from "./d1-fixture.ts";
+import {
+  TEST_PEPPER,
+  testPlugin,
+} from "../../src/test-support/plugin-fixture.ts";
+import { createWebCryptoKeyHasher } from "../../src/web-crypto/index.ts";
+import {
+  addUser,
+  d1Auth,
+  migrateFromV0_1_0,
+  resetDatabase,
+  resetToV0_1_0,
+} from "./d1-fixture.ts";
 
 const LIFETIME_DAYS = 30;
 const LIFETIME_MS = LIFETIME_DAYS * DAY_MS;
@@ -82,7 +99,7 @@ describe("the plugin on D1", () => {
       "inserted",
       "name-taken",
     ]);
-    expect(await store.listByOwner("alice")).toHaveLength(1);
+    expect(await store.listByOwner(user("alice"))).toHaveLength(1);
   });
 
   it("deletes a person's keys with the person", async () => {
@@ -92,7 +109,82 @@ describe("the plugin on D1", () => {
     await env.DATABASE.prepare("DELETE FROM user WHERE id = ?")
       .bind("alice")
       .run();
-    expect(await store.listByOwner("alice")).toEqual([]);
+    expect(await store.listByOwner(user("alice"))).toEqual([]);
+  });
+
+  it("deletes only the person's keys with the person: a system principal's keys, even one sharing the person's id, survive and still verify", async () => {
+    const plugin = testPlugin();
+    const context = await d1Auth(plugin).$context;
+    const service = apiKeysOf(context, plugin);
+    const common = {
+      scopes: { access: "read" },
+      claims: { provider: "otp" },
+    } as const;
+    const persons = await service.create({
+      ...common,
+      owner: { id: "alice" },
+      name: "laptop",
+      lifetimeMs: LIFETIME_MS,
+    });
+    const principals = await service.create({
+      ...common,
+      owner: { kind: "system", id: "deployer" },
+      name: "deploys",
+      lifetimeMs: LIFETIME_MS,
+    });
+    const sameId = await service.create({
+      ...common,
+      owner: { kind: "system", id: "alice" },
+      name: "laptop",
+      lifetimeMs: LIFETIME_MS,
+    });
+    if (
+      persons.outcome !== "created" ||
+      principals.outcome !== "created" ||
+      sameId.outcome !== "created"
+    ) {
+      throw new Error("not created");
+    }
+
+    await env.DATABASE.prepare("DELETE FROM user WHERE id = ?")
+      .bind("alice")
+      .run();
+
+    expect(await service.verify(persons.plaintext)).toEqual({
+      outcome: "unknown",
+    });
+    expect(await service.list({ id: "alice" })).toEqual([]);
+    expect(await service.verify(principals.plaintext)).toEqual({
+      outcome: "valid",
+      key: principals.key,
+    });
+    expect(principals.key.owner).toEqual({ kind: "system", id: "deployer" });
+    expect(await service.verify(sameId.plaintext)).toEqual({
+      outcome: "valid",
+      key: sameId.key,
+    });
+  });
+
+  it("refuses a row whose user reference disagrees with its owner at the database, by the check the README recommends", async () => {
+    await addUser("bob");
+    const insert = env.DATABASE.prepare(
+      "INSERT INTO api_key (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES (?, ?, ?, ?, 'n', ?, 's', '{}', '{}', 0, ?)",
+    );
+    for (const [kind, ownerId, userId, expiresAt] of [
+      ["system", "bob", "bob", 1],
+      ["user", "bob", null, 1],
+      ["user", "alice", "bob", 1],
+      ["robot", "bob", null, 1],
+    ] as const) {
+      const id = `${kind}-${ownerId}-${userId}-${expiresAt}`;
+      await expect(
+        insert.bind(id, kind, ownerId, userId, id, expiresAt).run(),
+      ).rejects.toThrow("CHECK constraint failed");
+    }
+    await insert.bind("person", "user", "bob", "bob", "hash-person", 1).run();
+    await insert
+      .bind("principal", "system", "bob", null, "hash-principal", 1)
+      .run();
   });
 
   it("creates, verifies with one throttled write, and revokes a key end to end", async () => {
@@ -140,5 +232,104 @@ describe("the plugin on D1", () => {
     expect(await service.verify(created.plaintext)).toEqual({
       outcome: "unknown",
     });
+  });
+
+  it("creates, verifies, records the use of, lists and revokes a system principal's key end to end", async () => {
+    const plugin = testPlugin();
+    const context = await d1Auth(plugin).$context;
+    const service = apiKeysOf(context, plugin);
+    const deployer = { kind: "system", id: "deployer" } as const;
+    const created = await service.create({
+      owner: deployer,
+      name: "deploys",
+      lifetimeMs: LIFETIME_MS,
+      scopes: { access: "write" },
+      claims: { provider: "google" },
+    });
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    const row = await env.DATABASE.prepare(
+      "SELECT owner_kind, owner_id, user_id FROM api_key WHERE id = ?",
+    )
+      .bind(created.key.id)
+      .first();
+    expect(row).toEqual({
+      owner_kind: "system",
+      owner_id: "deployer",
+      user_id: null,
+    });
+
+    const verified = await service.verify(created.plaintext);
+    if (verified.outcome !== "valid") throw new Error(verified.outcome);
+    expect(verified.key.owner).toEqual(deployer);
+    const deferred: Promise<unknown>[] = [];
+    await service.recordUse(verified.key, {
+      defer: (task) => {
+        deferred.push(task);
+      },
+    });
+    expect(await Promise.all(deferred)).toEqual([{ outcome: "touched" }]);
+    expect(await service.list(deployer)).toEqual([
+      {
+        status: "valid",
+        key: { ...created.key, lastUsedAt: created.key.createdAt },
+      },
+    ]);
+    expect(await service.list({ id: "deployer" })).toEqual([]);
+    expect(
+      await service.revoke({ id: created.key.id, owner: { id: "deployer" } }),
+    ).toEqual({ outcome: "not-found" });
+    expect(await service.revokeAllForOwner(deployer)).toEqual({ revoked: 1 });
+    expect(await service.verify(created.plaintext)).toEqual({
+      outcome: "unknown",
+    });
+  });
+});
+
+describe("upgrading a 0.1.0 database", () => {
+  it("keeps a person's key verifying after the README's migration, and then accepts system keys", async () => {
+    await resetToV0_1_0();
+    await addUser("alice");
+    const plaintext = await generateKey(TEST_PREFIX, seededRandomSource(1));
+    const keyHash = await createWebCryptoKeyHasher(TEST_PEPPER).hash(plaintext);
+    const expiresAt = TEST_START.getTime() + LIFETIME_MS;
+    await env.DATABASE.prepare(
+      "INSERT INTO api_key (id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at) VALUES ('old-key', 'alice', 'laptop', ?, ?, ?, ?, ?, ?)",
+    )
+      .bind(
+        keyHash,
+        keyStart(TEST_PREFIX, plaintext),
+        JSON.stringify({ access: "read" }),
+        JSON.stringify({ provider: "google" }),
+        TEST_START.getTime(),
+        expiresAt,
+      )
+      .run();
+
+    await migrateFromV0_1_0();
+
+    const plugin = testPlugin();
+    const context = await d1Auth(plugin).$context;
+    if (context.checkSchema === undefined)
+      throw new Error("The Drizzle adapter registers a schema check");
+    await expect(context.checkSchema()).resolves.toBeUndefined();
+    const service = apiKeysOf(context, plugin);
+    const verified = await service.verify(plaintext);
+    expect(verified).toMatchObject({
+      outcome: "valid",
+      key: {
+        id: "old-key",
+        owner: { kind: "user", id: "alice" },
+        ownerId: "alice",
+        expiresAt: new Date(expiresAt),
+      },
+    });
+    const created = await service.create({
+      owner: { kind: "system", id: "deployer" },
+      name: "laptop",
+      lifetimeMs: LIFETIME_MS,
+      scopes: { access: "read" },
+      claims: { provider: "google" },
+    });
+    expect(created.outcome).toBe("created");
   });
 });

@@ -3,11 +3,14 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { drizzle } from "drizzle-orm/d1";
 import {
+  check,
+  index,
   integer,
   sqliteTable,
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 import {
   TEST_AUTH_SECRET,
   TEST_BASE_URL,
@@ -86,15 +89,15 @@ const verification = sqliteTable("verification", {
 });
 
 /**
- * The plugin's `apiKey` model as a host would declare it in Drizzle. `scopes` and `claims` are plain `text()`, not `text({ mode: "json" })`: better-auth's SQLite adapter already serialises `json` fields to a string, so a JSON-mode column would encode them twice.
+ * The plugin's `apiKey` model as a host would declare it in Drizzle, with the check the README recommends that `userId` agrees with the owner. `scopes` and `claims` are plain `text()`, not `text({ mode: "json" })`: better-auth's SQLite adapter already serialises `json` fields to a string, so a JSON-mode column would encode them twice.
  */
 const apiKey = sqliteTable(
   "api_key",
   {
     id: text().primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
+    ownerKind: text("owner_kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
     name: text().notNull(),
     keyHash: text("key_hash").notNull().unique(),
     start: text().notNull(),
@@ -104,11 +107,22 @@ const apiKey = sqliteTable(
     expiresAt: timestamp("expires_at").notNull(),
     lastUsedAt: timestamp("last_used_at"),
   },
-  (table) => [uniqueIndex("api_key_user_id_name").on(table.userId, table.name)],
+  (table) => [
+    uniqueIndex("api_key_owner_name").on(
+      table.ownerKind,
+      table.ownerId,
+      table.name,
+    ),
+    index("api_key_user_id").on(table.userId),
+    check(
+      "api_key_owner",
+      sql`(${table.ownerKind} = 'user' AND ${table.userId} IS NOT NULL AND ${table.userId} = ${table.ownerId}) OR (${table.ownerKind} = 'system' AND ${table.userId} IS NULL)`,
+    ),
+  ],
 );
 
-/** The same tables as SQL, created fresh for each test: the package ships no migrations, so the test owns its database. */
-const RESET_STATEMENTS = [
+/** better-auth's core tables as SQL, created fresh for each test, after dropping every table: the package ships no migrations, so the test owns its database. */
+const CORE_TABLES = [
   "DROP TABLE IF EXISTS api_key",
   "DROP TABLE IF EXISTS verification",
   "DROP TABLE IF EXISTS account",
@@ -118,15 +132,54 @@ const RESET_STATEMENTS = [
   `CREATE TABLE session (id text PRIMARY KEY, expires_at integer NOT NULL, token text NOT NULL UNIQUE, created_at integer NOT NULL, updated_at integer NOT NULL, ip_address text, user_agent text, user_id text NOT NULL REFERENCES user(id) ON DELETE CASCADE)`,
   `CREATE TABLE account (id text PRIMARY KEY, account_id text NOT NULL, provider_id text NOT NULL, user_id text NOT NULL REFERENCES user(id) ON DELETE CASCADE, access_token text, refresh_token text, id_token text, access_token_expires_at integer, refresh_token_expires_at integer, scope text, password text, created_at integer NOT NULL, updated_at integer NOT NULL)`,
   `CREATE TABLE verification (id text PRIMARY KEY, identifier text NOT NULL, value text NOT NULL, expires_at integer NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)`,
+];
+
+/** The indexes {@link apiKey} declares: a name unique per owner, and `user_id` indexed for the cascading delete. Dropping the 0.1.0 table drops its `(user_id, name)` index with it. */
+const API_KEY_INDEXES = [
+  "CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name)",
+  "CREATE INDEX api_key_user_id ON api_key (user_id)",
+];
+
+/** The `api_key` table as {@link apiKey} declares it. */
+const API_KEY_TABLE = [
+  `CREATE TABLE api_key (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer NOT NULL, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id) OR (owner_kind = 'system' AND user_id IS NULL)))`,
+  ...API_KEY_INDEXES,
+];
+
+/** The `api_key` table as version 0.1.0 of the package declared it: every key a person's, and every key expiring. */
+const V0_1_0_API_KEY_TABLE = [
   `CREATE TABLE api_key (id text PRIMARY KEY, user_id text NOT NULL REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer NOT NULL, last_used_at integer)`,
   "CREATE UNIQUE INDEX api_key_user_id_name ON api_key (user_id, name)",
 ];
 
+/** The README's migration from 0.1.0, statement for statement: SQLite cannot relax `NOT NULL` in place, so the table is rebuilt and its rows copied across. Nothing references `api_key`, so dropping the old table needs no foreign-key pragma. */
+const MIGRATION_FROM_V0_1_0 = [
+  `CREATE TABLE api_key_new (id text PRIMARY KEY, owner_kind text NOT NULL, owner_id text NOT NULL, user_id text REFERENCES user(id) ON DELETE CASCADE, name text NOT NULL, key_hash text NOT NULL UNIQUE, start text NOT NULL, scopes text NOT NULL, claims text NOT NULL, created_at integer NOT NULL, expires_at integer NOT NULL, last_used_at integer, CONSTRAINT api_key_owner CHECK ((owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id) OR (owner_kind = 'system' AND user_id IS NULL)))`,
+  "INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at) SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key",
+  "DROP TABLE api_key",
+  "ALTER TABLE api_key_new RENAME TO api_key",
+  ...API_KEY_INDEXES,
+];
+
+async function run(statements: readonly string[]): Promise<void> {
+  await env.DATABASE.batch(
+    statements.map((statement) => env.DATABASE.prepare(statement)),
+  );
+}
+
+/** Recreates the tables, empty, with `api_key` as version 0.1.0 declared it. */
+export async function resetToV0_1_0(): Promise<void> {
+  await run([...CORE_TABLES, ...V0_1_0_API_KEY_TABLE]);
+}
+
+/** Runs the README's migration from 0.1.0. */
+export async function migrateFromV0_1_0(): Promise<void> {
+  await run(MIGRATION_FROM_V0_1_0);
+}
+
 /** Recreates the tables, empty. */
 export async function resetDatabase(): Promise<void> {
-  await env.DATABASE.batch(
-    RESET_STATEMENTS.map((statement) => env.DATABASE.prepare(statement)),
-  );
+  await run([...CORE_TABLES, ...API_KEY_TABLE]);
 }
 
 /** A better-auth instance over the test D1 database through the Drizzle adapter, with `plugin` registered. */

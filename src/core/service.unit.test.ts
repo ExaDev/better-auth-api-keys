@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { API_KEY_NAME_MAX_LENGTH } from "../contract/index.ts";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  API_KEY_NAME_MAX_LENGTH,
+  type ApiKeySystemOwner,
+  type ApiKeyUserOwner,
+} from "../contract/index.ts";
 import { KEY_START_RANDOM_LENGTH } from "./key-format.ts";
 import {
   createInMemoryApiKeyStore,
@@ -19,7 +23,7 @@ import {
   type TestClaims,
   type TestScopes,
 } from "../test-support/service-fixture.ts";
-import { storedKey } from "../test-support/store-contract.ts";
+import { storedKey, system, user } from "../test-support/store-contract.ts";
 import { createWebCryptoKeyHasher } from "../web-crypto/index.ts";
 import { createApiKeyService, type CreateApiKeyInput } from "./service.ts";
 
@@ -34,6 +38,9 @@ const KEY_ID_LENGTH = 22;
 
 const alice = { id: "alice" };
 const bob = { id: "bob" };
+const deployer = { kind: "system", id: "deployer" } as const;
+/** A system principal whose id is the same string as the person `alice`'s. */
+const aliceSystem = { kind: "system", id: "alice" } as const;
 
 function input(
   overrides: Partial<CreateApiKeyInput<TestScopes, TestClaims>> = {},
@@ -98,6 +105,7 @@ describe("ApiKeyService.create", () => {
     expect(created.plaintext.startsWith(TEST_PREFIX)).toBe(true);
     expect(created.key).toEqual({
       id: created.key.id,
+      owner: { kind: "user", id: "alice" },
       ownerId: "alice",
       name: "deploys",
       start: created.plaintext.slice(
@@ -113,7 +121,7 @@ describe("ApiKeyService.create", () => {
     expect(created.key.id).toMatch(
       new RegExp(`^[0-9A-Za-z]{${KEY_ID_LENGTH}}$`, "u"),
     );
-    const [stored] = await store.listByOwner("alice");
+    const [stored] = await store.listByOwner(user("alice"));
     expect(stored?.keyHash).toMatch(/^[0-9a-f]{64}$/u);
     expect(JSON.stringify(stored)).not.toContain(
       created.plaintext.slice(TEST_PREFIX.length),
@@ -164,7 +172,7 @@ describe("ApiKeyService.create", () => {
       outcome: "invalid",
       field,
     });
-    expect(await store.listByOwner(refused.owner.id)).toEqual([]);
+    expect(await store.listByOwner(user("alice"))).toEqual([]);
   });
 
   it("accepts a name of the maximum length and a lifetime of exactly the maximum", async () => {
@@ -239,7 +247,7 @@ describe("ApiKeyService.verify", () => {
     const { service } = serviceFixture({ store });
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
-    const [stored] = await store.listByOwner("alice");
+    const [stored] = await store.listByOwner(user("alice"));
     if (stored === undefined) throw new Error("not stored");
     const hasher = createWebCryptoKeyHasher("test pepper");
 
@@ -268,6 +276,7 @@ describe("ApiKeyService.verify", () => {
     expect(await service.verify(created.plaintext)).toEqual({
       outcome: "expired",
       id: created.key.id,
+      owner: { kind: "user", id: "alice" },
       ownerId: "alice",
       createdAt: created.key.createdAt,
     });
@@ -279,7 +288,9 @@ describe("ApiKeyService.verify", () => {
     if (created.outcome !== "created") throw new Error(created.outcome);
     expect((await service.verify(created.plaintext)).outcome).toBe("valid");
     expect(calls.some((call) => call.method === "touchLastUsed")).toBe(false);
-    expect((await store.listByOwner("alice"))[0]?.lastUsedAt).toBeUndefined();
+    expect(
+      (await store.listByOwner(user("alice")))[0]?.lastUsedAt,
+    ).toBeUndefined();
   });
 });
 
@@ -303,7 +314,7 @@ describe("ApiKeyService.recordUse", () => {
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     const lastUsed = async () =>
-      (await store.listByOwner("alice"))[0]?.lastUsedAt;
+      (await store.listByOwner(user("alice")))[0]?.lastUsedAt;
 
     await useKey(service, created.plaintext, defer);
     expect(deferred).toHaveLength(1);
@@ -394,6 +405,7 @@ describe("ApiKeyService.list", () => {
         status: "unreadable",
         key: {
           id: unreadable.id,
+          owner: { kind: "user", id: "alice" },
           ownerId: "alice",
           name: unreadable.name,
           start: unreadable.start,
@@ -540,5 +552,171 @@ describe("abort signals", () => {
       method: "touchLastUsed",
       signal: undefined,
     });
+  });
+});
+
+describe("system principals' keys", () => {
+  it("creates a key owned by a system principal, and verifies it with its owner's kind", async () => {
+    const { service, store } = serviceFixture();
+    const created = await service.create(input({ owner: deployer }));
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    expect(created.key).toMatchObject({
+      owner: { kind: "system", id: "deployer" },
+      ownerId: "deployer",
+      expiresAt: new Date(TEST_START.getTime() + LIFETIME_MS),
+    });
+    expect(await store.listByOwner(system("deployer"))).toHaveLength(1);
+    expect(await store.listByOwner(user("deployer"))).toEqual([]);
+    const verified = await service.verify(created.plaintext);
+    expect(verified).toEqual({ outcome: "valid", key: created.key });
+  });
+
+  it("reads an owner named without a kind as a person, exactly as before system principals existed", async () => {
+    const { service } = serviceFixture();
+    const created = await service.create(input({ owner: { id: "alice" } }));
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    expect(created.key.owner).toEqual({ kind: "user", id: "alice" });
+    expect(await service.list({ kind: "user", id: "alice" })).toHaveLength(1);
+    expect(await service.list(aliceSystem)).toEqual([]);
+  });
+
+  it("distinguishes the owner's kind in the verify result's type, without a cast", async () => {
+    const { service } = serviceFixture();
+    const created = await service.create(input({ owner: deployer }));
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    const verified = await service.verify(created.plaintext);
+    if (verified.outcome !== "valid") throw new Error(verified.outcome);
+    const { owner } = verified.key;
+    if (owner.kind === "user") throw new Error("a person's key");
+    expectTypeOf(owner).toEqualTypeOf<ApiKeySystemOwner>();
+    expect(owner).toEqual(deployer);
+    if (verified.key.owner.kind === "user") {
+      expectTypeOf(verified.key.owner).toEqualTypeOf<ApiKeyUserOwner>();
+    }
+  });
+
+  it.each([
+    ["an empty principal id", { kind: "system", id: "" }],
+    [
+      "a kind that is neither a person nor a principal",
+      { kind: "robot", id: "x" },
+    ],
+    ["a misspelt kind", { kind: "System", id: "deployer" }],
+  ])("refuses %s, and never reads it as a person", async (_, owner) => {
+    const { service, store } = serviceFixture();
+    expect(
+      // @ts-expect-error an owner the schema refuses, as an untyped caller could pass
+      await service.create(input({ owner })),
+    ).toEqual({ outcome: "invalid", field: "owner" });
+    expect(await store.listByOwner(user(owner.id))).toEqual([]);
+    // @ts-expect-error as above
+    await expect(service.list(owner)).rejects.toThrow();
+    // @ts-expect-error as above
+    await expect(service.revoke({ id: "any", owner })).rejects.toThrow();
+    // @ts-expect-error as above
+    await expect(service.revokeAllForOwner(owner)).rejects.toThrow();
+  });
+
+  it("keeps names unique per owner: a person and a principal with the same id may each use a name once", async () => {
+    const { service } = serviceFixture();
+    expect((await service.create(input({ owner: alice }))).outcome).toBe(
+      "created",
+    );
+    expect((await service.create(input({ owner: aliceSystem }))).outcome).toBe(
+      "created",
+    );
+    expect(await service.create(input({ owner: aliceSystem }))).toEqual({
+      outcome: "name-taken",
+    });
+    expect(await service.create(input({ owner: alice }))).toEqual({
+      outcome: "name-taken",
+    });
+    expect((await service.create(input({ owner: deployer }))).outcome).toBe(
+      "created",
+    );
+  });
+
+  it("revokes a principal's key only when the named owner matches in kind as well as id", async () => {
+    const { service } = serviceFixture();
+    const created = await service.create(input({ owner: aliceSystem }));
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    for (const owner of [
+      alice,
+      { kind: "user", id: "alice" } as const,
+      deployer,
+    ]) {
+      expect(await service.revoke({ id: created.key.id, owner })).toEqual({
+        outcome: "not-found",
+      });
+    }
+    expect((await service.verify(created.plaintext)).outcome).toBe("valid");
+    expect(
+      await service.revoke({ id: created.key.id, owner: aliceSystem }),
+    ).toEqual({ outcome: "revoked" });
+  });
+
+  it("revokes every key of one owner, leaving the other kind's keys with the same id working", async () => {
+    const { service } = serviceFixture();
+    const persons = await service.create(input({ owner: alice }));
+    const principals = await service.create(input({ owner: aliceSystem }));
+    if (persons.outcome !== "created" || principals.outcome !== "created") {
+      throw new Error("not created");
+    }
+    expect(await service.revokeAllForOwner(alice)).toEqual({ revoked: 1 });
+    expect((await service.verify(principals.plaintext)).outcome).toBe("valid");
+    expect(await service.revokeAllForOwner(aliceSystem)).toEqual({
+      revoked: 1,
+    });
+    expect((await service.verify(principals.plaintext)).outcome).toBe(
+      "unknown",
+    );
+  });
+
+  it("applies the usual expiry rules to a principal's key", async () => {
+    const { service, clock } = serviceFixture();
+    expect(
+      await service.create(
+        input({ owner: deployer, lifetimeMs: TEST_MAX_LIFETIME_MS + 1 }),
+      ),
+    ).toEqual({ outcome: "invalid", field: "lifetime" });
+    expect(
+      await service.create(input({ owner: deployer, lifetimeMs: 0 })),
+    ).toEqual({ outcome: "invalid", field: "lifetime" });
+    const created = await service.create(
+      input({ owner: deployer, lifetimeMs: DAY_MS }),
+    );
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    clock.advance(DAY_MS - 1);
+    expect((await service.verify(created.plaintext)).outcome).toBe("valid");
+    clock.advance(1);
+    expect(await service.verify(created.plaintext)).toEqual({
+      outcome: "expired",
+      id: created.key.id,
+      owner: deployer,
+      ownerId: "deployer",
+      createdAt: created.key.createdAt,
+    });
+  });
+
+  it("throttles the last-used write of a principal's key as it does a person's", async () => {
+    const { service, store, clock, deferred, defer } = serviceFixture();
+    const created = await service.create(input({ owner: deployer }));
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    const use = async () => {
+      const verified = await service.verify(created.plaintext);
+      if (verified.outcome !== "valid") throw new Error(verified.outcome);
+
+      return service.recordUse(verified.key, { defer });
+    };
+    expect(await use()).toEqual({ outcome: "scheduled" });
+    expect(await deferred[0]).toEqual({ outcome: "touched" });
+    clock.advance(TEST_LAST_USED_INTERVAL_MS);
+    expect(await use()).toEqual({ outcome: "not-due" });
+    clock.advance(1);
+    expect(await use()).toEqual({ outcome: "scheduled" });
+    expect(await deferred[1]).toEqual({ outcome: "touched" });
+    expect(
+      (await store.listByOwner(system("deployer")))[0]?.lastUsedAt,
+    ).toEqual(new Date(TEST_START.getTime() + TEST_LAST_USED_INTERVAL_MS + 1));
   });
 });

@@ -1,4 +1,4 @@
-import type { StoredApiKey } from "./schemas.ts";
+import type { ApiKeyOwner, StoredApiKey } from "./schemas.ts";
 import type { ApiKeysContractVersion } from "./version.ts";
 
 /**
@@ -51,7 +51,7 @@ export type ApiKeyTouchOutcome =
  */
 export interface ApiKeyStore {
   readonly version: ApiKeysContractVersion;
-  /** Stores a new key, unless its owner already has a key with the same name, which is refused rather than overwritten. */
+  /** Stores a new key, unless its owner (the same kind and id) already has a key with the same name, which is refused rather than overwritten. */
   insert: (
     key: StoredApiKey,
     options?: PortCallOptions,
@@ -61,19 +61,19 @@ export interface ApiKeyStore {
     keyHash: string,
     options?: PortCallOptions,
   ) => Promise<ApiKeyFindOutcome>;
-  /** Every key `ownerId` holds, in no particular order. */
+  /** Every key `owner` holds, in no particular order: only keys of the same kind of owner with the same id. */
   listByOwner: (
-    ownerId: string,
+    owner: ApiKeyOwner,
     options?: PortCallOptions,
   ) => Promise<readonly StoredApiKey[]>;
-  /** Deletes the key `id`; when `ownerId` is given, only if that owner holds it, in the same operation. */
+  /** Deletes the key `id`; when `owner` is given, only if that owner (the same kind and id) holds it, in the same operation. */
   delete: (
-    target: { readonly id: string; readonly ownerId?: string | undefined },
+    target: { readonly id: string; readonly owner?: ApiKeyOwner | undefined },
     options?: PortCallOptions,
   ) => Promise<ApiKeyDeleteOutcome>;
-  /** Deletes every key `ownerId` holds. */
+  /** Deletes every key `owner` holds, and no key of an owner of the other kind with the same id. */
   deleteByOwner: (
-    ownerId: string,
+    owner: ApiKeyOwner,
     options?: PortCallOptions,
   ) => Promise<{ readonly deleted: number }>;
   /**

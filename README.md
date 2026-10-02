@@ -1,6 +1,6 @@
 # @exadev/better-auth-api-keys
 
-A [better-auth](https://www.better-auth.com/) plugin for long-lived API keys, for unattended scripts and services calling an API as a person. It has no runtime dependencies of its own: `zod`, `better-auth` and `@better-auth/core` are peers, so the plugin parses with the same Zod your scope and claim schemas were built with, and runs on the better-auth your app already has. It uses only Web APIs, so it runs unchanged in Cloudflare Workers, browsers and Node 22 or later.
+A [better-auth](https://www.better-auth.com/) plugin for long-lived API keys, for unattended scripts and services calling an API as a person, or as a system principal the host defines that belongs to no person. It has no runtime dependencies of its own: `zod`, `better-auth` and `@better-auth/core` are peers, so the plugin parses with the same Zod your scope and claim schemas were built with, and runs on the better-auth your app already has. It uses only Web APIs, so it runs unchanged in Cloudflare Workers, browsers and Node 22 or later.
 
 ```sh
 pnpm add @exadev/better-auth-api-keys zod better-auth @better-auth/core
@@ -23,7 +23,31 @@ A key is a prefix the host chooses (`exshow_` in the examples here) followed by 
 
 ### What it deliberately does not do
 
-It has no management endpoints (the host calls the service from its own authorised procedures), no rotation (revoke, then create), no sweep of expired keys, no remaining-uses or refill quotas, no organisation ownership, no rate limiting (the host's platform limits requests), and no permission model of its own. It does not decide whom a key acts as beyond recording its owner's id: the host checks the owner is still allowed in, on every request.
+It has no management endpoints (the host calls the service from its own authorised procedures), no rotation (revoke, then create), no sweep of expired keys, no remaining-uses or refill quotas, no organisation ownership, no rate limiting (the host's platform limits requests), and no permission model or authority of its own, for people or for system principals. It does not decide whom a key acts as beyond recording its owner's kind and id: the host checks the owner is still allowed in, and what it may do, on every request.
+
+## System principals
+
+A system key is programmatic access that belongs to no person, so it keeps working when people come and go. It is owned by a system principal: a named caller the host defines and stores in its own table, with whatever role or ceiling the host gives it. The package knows only the principal's id and that it is a principal, never its authority; the host decides what the principal may do, on each request, exactly as it does for a person. A principal's id is the host's own and is never resolved by the package, and it lives in a separate namespace from user ids, so `{ kind: "system", id: "alice" }` and the person `alice` are two different owners whose keys never mix.
+
+```ts
+const created = await service.create({
+  owner: { kind: "system", id: principal.id },
+  name: "nightly export",
+  lifetimeMs: 365 * DAY_MS,
+  scopes,
+  claims,
+});
+
+const result = await service.verify(presentedKey, { signal: request.signal });
+if (result.outcome === "valid") {
+  const { owner } = result.key;
+  // owner.kind narrows owner: look the principal up in the host's own table, or the person in better-auth's.
+}
+```
+
+An owner given as `{ id }` with no `kind` is a person, so every call written before system principals existed means what it did. Any other `kind` is refused, never read as a person. A name is unique per owner, and `revoke` with an owner deletes the key only if that owner, of the same kind, holds it. `verify` and `list` report `owner` alongside `ownerId`, which repeats `owner.id` for code that predates principals: a host that creates system keys must check `owner.kind` before treating `ownerId` as a person's id.
+
+**Deleting a principal is the host's job.** Deleting a person deletes their keys through the database's cascade, and leaves every system key alone. Nothing references a principal, so the package cannot cascade when one goes: the host's own principal deletion must call `service.revokeAllForOwner({ kind: "system", id })`, in the same operation where it can, or the principal's keys go on verifying for an owner the host no longer has. A host that looks the principal up on every request refuses them anyway, but should not rely on that alone.
 
 ## Using it
 
@@ -62,7 +86,78 @@ if (result.outcome === "valid" /* and the host's own checks accept it */) {
 }
 ```
 
-The plugin registers an `apiKey` model (`id`, `userId` referencing `user.id` with cascading delete, `name`, `keyHash` unique, `start`, `scopes` and `claims` as JSON, `createdAt`, `expiresAt`, and an unindexed nullable `lastUsedAt`, with `(userId, name)` unique). Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
+The plugin registers an `apiKey` model: `id`; the owner as `ownerKind` (`"user"` or `"system"`) and `ownerId`; a nullable `userId` referencing `user.id` with cascading delete, set (to `ownerId`) only for a person's key, and indexed for that delete; `name`; `keyHash` unique; `start`; `scopes` and `claims` as JSON; `createdAt`; `expiresAt`; and an unindexed nullable `lastUsedAt`; with `(ownerKind, ownerId, name)` unique. The owner is two required columns rather than a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a nullable column (SQL Server and MongoDB treat nulls in a unique index as equal), and a name must be unique per owner. Its table and columns can be renamed through the `schema` option, as better-auth's own plugins allow. With a Drizzle SQLite database, declare `scopes` and `claims` as plain `text()`: better-auth's SQLite adapter already serialises JSON fields, so a `text({ mode: "json" })` column encodes them twice.
+
+better-auth's schema cannot express a check across columns, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` does not agree with its owner. A host's own migration should add the same rule as a check constraint, as the SQLite one below does.
+
+### Upgrading from 0.1.0
+
+0.1.0 stored every key as a person's, with `userId` required. Upgrading needs a migration in the host's own tool (the package ships none), and better-auth's schema check fails at start-up until it has run. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's. With the column names from the Drizzle example (`user_id`, `key_hash` and so on; adjust them to your own):
+
+```sql
+CREATE TABLE api_key_new (
+  id text PRIMARY KEY,
+  owner_kind text NOT NULL,
+  owner_id text NOT NULL,
+  user_id text REFERENCES user(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  key_hash text NOT NULL UNIQUE,
+  start text NOT NULL,
+  scopes text NOT NULL,
+  claims text NOT NULL,
+  created_at integer NOT NULL,
+  expires_at integer NOT NULL,
+  last_used_at integer,
+  CONSTRAINT api_key_owner CHECK (
+    (owner_kind = 'user' AND user_id IS NOT NULL AND user_id = owner_id)
+    OR (owner_kind = 'system' AND user_id IS NULL)
+  )
+);
+INSERT INTO api_key_new (id, owner_kind, owner_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at)
+  SELECT id, 'user', user_id, user_id, name, key_hash, start, scopes, claims, created_at, expires_at, last_used_at FROM api_key;
+DROP TABLE api_key;
+ALTER TABLE api_key_new RENAME TO api_key;
+CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
+CREATE INDEX api_key_user_id ON api_key (user_id);
+```
+
+Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), make `user_id` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
+
+The Drizzle declaration matching the migration:
+
+```ts
+export const apiKey = sqliteTable(
+  "api_key",
+  {
+    id: text().primaryKey(),
+    ownerKind: text("owner_kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    name: text().notNull(),
+    keyHash: text("key_hash").notNull().unique(),
+    start: text().notNull(),
+    scopes: text().notNull(),
+    claims: text().notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    uniqueIndex("api_key_owner_name").on(
+      table.ownerKind,
+      table.ownerId,
+      table.name,
+    ),
+    index("api_key_user_id").on(table.userId),
+    check(
+      "api_key_owner",
+      sql`(${table.ownerKind} = 'user' AND ${table.userId} IS NOT NULL AND ${table.userId} = ${table.ownerId}) OR (${table.ownerKind} = 'system' AND ${table.userId} IS NULL)`,
+    ),
+  ],
+);
+```
+
+The code changes are small. Existing calls keep their meaning, and keys carry `owner`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
 
 ## Entry points
 

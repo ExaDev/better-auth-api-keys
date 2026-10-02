@@ -3,6 +3,7 @@ import * as z from "zod/mini";
 import {
   API_KEYS_CONTRACT_VERSION,
   storedApiKeySchema,
+  type ApiKeyOwner,
   type ApiKeyStore,
   type StoredApiKey,
 } from "../contract/index.ts";
@@ -16,7 +17,9 @@ const LIST_PAGE_SIZE = 100;
 /** A row as better-auth's adapter returns it: logical field names, dates as `Date`, JSON parsed, and `null` for an unset nullable column. */
 const apiKeyRowSchema = z.object({
   id: z.string(),
-  userId: z.string(),
+  ownerKind: z.string(),
+  ownerId: z.string(),
+  userId: z.nullish(z.string()),
   name: z.string(),
   keyHash: z.string(),
   start: z.string(),
@@ -27,13 +30,27 @@ const apiKeyRowSchema = z.object({
   lastUsedAt: z.nullish(z.date()),
 });
 
+/** The row's owner, throwing unless its `userId` agrees with it: a person's key references that same person, and a system principal's key references no one. A row that breaks this is a broken database, never a key to attribute to a guess. */
+function ownerOfRow(row: z.output<typeof apiKeyRowSchema>): ApiKeyOwner {
+  const userId = row.userId ?? undefined;
+  if (row.ownerKind === "user" && userId === row.ownerId) {
+    return { kind: "user", id: row.ownerId };
+  }
+  if (row.ownerKind === "system" && userId === undefined) {
+    return { kind: "system", id: row.ownerId };
+  }
+  throw new Error(
+    "An API key row must be a person's key referencing that person, or a system principal's key referencing no one",
+  );
+}
+
 /** Turns an adapter row into a stored key, throwing if the row does not have the model's shape: a malformed row is a broken database, never a key to guess at. */
 function storedKeyOf(row: unknown): StoredApiKey {
   const parsed = z.parse(apiKeyRowSchema, row);
 
   return z.parse(storedApiKeySchema, {
     id: parsed.id,
-    ownerId: parsed.userId,
+    owner: ownerOfRow(parsed),
     name: parsed.name,
     keyHash: parsed.keyHash,
     start: parsed.start,
@@ -41,15 +58,20 @@ function storedKeyOf(row: unknown): StoredApiKey {
     claims: parsed.claims,
     createdAt: parsed.createdAt,
     expiresAt: parsed.expiresAt,
-    lastUsedAt: parsed.lastUsedAt === null ? undefined : parsed.lastUsedAt,
+    lastUsedAt: parsed.lastUsedAt ?? undefined,
   });
 }
 
-function byOwnerAndName(ownerId: string, name: string): Where[] {
+/** Matches `owner`'s keys, by kind and id, so a person and a principal with the same id never match each other's keys. */
+function byOwner(owner: Readonly<ApiKeyOwner>): Where[] {
   return [
-    { field: "userId", value: ownerId },
-    { field: "name", value: name },
+    { field: "ownerKind", value: owner.kind },
+    { field: "ownerId", value: owner.id },
   ];
+}
+
+function byOwnerAndName(owner: Readonly<ApiKeyOwner>, name: string): Where[] {
+  return [...byOwner(owner), { field: "name", value: name }];
 }
 
 /** The part of better-auth's database adapter the store uses. Narrower than `DBAdapter` itself, whose `transaction` ties it to one auth instance's options type, so any instance's adapter fits. */
@@ -73,7 +95,7 @@ export function createAdapterApiKeyStore(
 
     async insert(key, options) {
       options?.signal?.throwIfAborted();
-      const where = byOwnerAndName(key.ownerId, key.name);
+      const where = byOwnerAndName(key.owner, key.name);
       const adapter = adapterOf();
       if ((await adapter.findOne({ model: API_KEY_MODEL, where })) !== null) {
         return { outcome: "name-taken" };
@@ -81,7 +103,9 @@ export function createAdapterApiKeyStore(
       options?.signal?.throwIfAborted();
       const row = {
         id: key.id,
-        userId: key.ownerId,
+        ownerKind: key.owner.kind,
+        ownerId: key.owner.id,
+        userId: key.owner.kind === "user" ? key.owner.id : null,
         name: key.name,
         keyHash: key.keyHash,
         start: key.start,
@@ -98,7 +122,7 @@ export function createAdapterApiKeyStore(
           forceAllowId: true,
         });
       } catch (error) {
-        // A concurrent insert of the same owner and name loses on the unique (userId, name) index. Adapters report that as their own driver error, so the store recognises it by the row that now exists rather than by any error's wording.
+        // A concurrent insert of the same owner and name loses on the unique (ownerKind, ownerId, name) index. Adapters report that as their own driver error, so the store recognises it by the row that now exists rather than by any error's wording.
         if ((await adapter.findOne({ model: API_KEY_MODEL, where })) !== null) {
           return { outcome: "name-taken" };
         }
@@ -120,13 +144,13 @@ export function createAdapterApiKeyStore(
         : { outcome: "found", key: storedKeyOf(row) };
     },
 
-    async listByOwner(ownerId, options) {
+    async listByOwner(owner, options) {
       /** The owner's keys from `offset` on, one page per call: each page's offset depends on the previous page having been full, so the pages are read in turn. */
       const keysFrom = async (offset: number): Promise<StoredApiKey[]> => {
         options?.signal?.throwIfAborted();
         const page = await adapterOf().findMany({
           model: API_KEY_MODEL,
-          where: [{ field: "userId", value: ownerId }],
+          where: byOwner(owner),
           sortBy: { field: "id", direction: "asc" },
           limit: LIST_PAGE_SIZE,
           offset,
@@ -144,9 +168,7 @@ export function createAdapterApiKeyStore(
     async delete(target, options) {
       options?.signal?.throwIfAborted();
       const where: Where[] = [{ field: "id", value: target.id }];
-      if (target.ownerId !== undefined) {
-        where.push({ field: "userId", value: target.ownerId });
-      }
+      if (target.owner !== undefined) where.push(...byOwner(target.owner));
       const deleted = await adapterOf().deleteMany({
         model: API_KEY_MODEL,
         where,
@@ -155,11 +177,11 @@ export function createAdapterApiKeyStore(
       return deleted > 0 ? { outcome: "deleted" } : { outcome: "not-found" };
     },
 
-    async deleteByOwner(ownerId, options) {
+    async deleteByOwner(owner, options) {
       options?.signal?.throwIfAborted();
       const deleted = await adapterOf().deleteMany({
         model: API_KEY_MODEL,
-        where: [{ field: "userId", value: ownerId }],
+        where: byOwner(owner),
       });
 
       return { deleted };
