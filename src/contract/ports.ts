@@ -38,6 +38,13 @@ export type ApiKeyFindOutcome =
   | { readonly outcome: "found"; readonly key: StoredApiKey }
   | { readonly outcome: "not-found" };
 
+/**
+ * One key of an owner's, as {@link ApiKeyStore.listByOwner} reads it: a stored key, or a row the store could not read as one (an owner column that disagrees with the owner, a field of the wrong shape), named by its id so the owner can still see and revoke it. Only a store over a database can hold a malformed row.
+ */
+export type ApiKeyListing =
+  | { readonly outcome: "stored"; readonly key: StoredApiKey }
+  | { readonly outcome: "malformed"; readonly id: string };
+
 /** The result of {@link ApiKeyStore.delete}. */
 export type ApiKeyDeleteOutcome =
   { readonly outcome: "deleted" } | { readonly outcome: "not-found" };
@@ -61,11 +68,11 @@ export interface ApiKeyStore {
     keyHash: string,
     options?: PortCallOptions,
   ) => Promise<ApiKeyFindOutcome>;
-  /** Every key `owner` holds, in no particular order: only keys of the same kind of owner with the same id. */
+  /** Every key `owner` holds, in no particular order: only keys of the same kind of owner with the same id. A row that cannot be read as a key is listed as malformed rather than failing the whole list, so one bad row cannot hide the owner's other keys. */
   listByOwner: (
     owner: ApiKeyOwner,
     options?: PortCallOptions,
-  ) => Promise<readonly StoredApiKey[]>;
+  ) => Promise<readonly ApiKeyListing[]>;
   /** Deletes the key `id`; when `owner` is given, only if that owner (the same kind and id) holds it, in the same operation. */
   delete: (
     target: { readonly id: string; readonly owner?: ApiKeyOwner | undefined },

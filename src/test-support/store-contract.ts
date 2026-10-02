@@ -27,6 +27,20 @@ export function system(id: string): ApiKeyOwner {
   return { kind: "system", id };
 }
 
+/** The keys `store` lists for `owner`, failing the test if any row is malformed: no store under the contract suite holds one. */
+export async function listedKeys(
+  store: Readonly<ApiKeyStore>,
+  owner: ApiKeyOwner,
+): Promise<StoredApiKey[]> {
+  return (await store.listByOwner(owner)).map((listing) => {
+    if (listing.outcome !== "stored") {
+      throw new Error(`Key ${listing.id} is malformed`);
+    }
+
+    return listing.key;
+  });
+}
+
 let sequence = 0;
 /** A distinct, well-formed stored key for `owner` (a person's id, or any owner), with `overrides` applied. */
 export function storedKey(
@@ -99,7 +113,7 @@ export function describeApiKeyStoreContract(
       ).toEqual({
         outcome: "name-taken",
       });
-      expect(await store.listByOwner(user("owner-a"))).toEqual([first]);
+      expect(await listedKeys(store, user("owner-a"))).toEqual([first]);
     });
 
     it("allows the same name for different owners", async () => {
@@ -117,7 +131,7 @@ export function describeApiKeyStoreContract(
       );
       await Promise.all(owned.map(async (key) => store.insert(key)));
       await store.insert(storedKey("owner-b"));
-      const listed = await store.listByOwner(user("owner-a"));
+      const listed = await listedKeys(store, user("owner-a"));
       expect(listed.map((key) => key.id).sort()).toEqual(
         owned.map((key) => key.id).sort(),
       );
@@ -164,8 +178,8 @@ export function describeApiKeyStoreContract(
       expect(await store.deleteByOwner(user("owner-a"))).toEqual({
         deleted: 2,
       });
-      expect(await store.listByOwner(user("owner-a"))).toEqual([]);
-      expect(await store.listByOwner(user("owner-b"))).toEqual([other]);
+      expect(await listedKeys(store, user("owner-a"))).toEqual([]);
+      expect(await listedKeys(store, user("owner-b"))).toEqual([other]);
       expect(await store.deleteByOwner(user("owner-a"))).toEqual({
         deleted: 0,
       });
@@ -239,7 +253,7 @@ export function describeApiKeyStoreContract(
         outcome: "found",
         key,
       });
-      expect(await store.listByOwner(system("deployer"))).toEqual([key]);
+      expect(await listedKeys(store, system("deployer"))).toEqual([key]);
     });
 
     it("keeps names unique per owner kind, so a person and a principal with the same id may share a name", async () => {
@@ -253,8 +267,8 @@ export function describeApiKeyStoreContract(
       expect(
         await store.insert(storedKey(system("other"), { name: "deploys" })),
       ).toEqual({ outcome: "inserted" });
-      expect(await store.listByOwner(system("owner-a"))).toEqual([principals]);
-      expect(await store.listByOwner(user("owner-a"))).toEqual([persons]);
+      expect(await listedKeys(store, system("owner-a"))).toEqual([principals]);
+      expect(await listedKeys(store, user("owner-a"))).toEqual([persons]);
     });
 
     it("deletes by id and owner only when the owner's kind matches as well as its id", async () => {
@@ -278,7 +292,7 @@ export function describeApiKeyStoreContract(
       expect(
         await store.delete({ id: principals.id, owner: system("owner-a") }),
       ).toEqual({ outcome: "deleted" });
-      expect(await store.listByOwner(user("owner-a"))).toEqual([persons]);
+      expect(await listedKeys(store, user("owner-a"))).toEqual([persons]);
     });
 
     it("deletes every key of one owner kind and no key of the other kind with the same id", async () => {
@@ -289,7 +303,7 @@ export function describeApiKeyStoreContract(
       expect(await store.deleteByOwner(user("owner-a"))).toEqual({
         deleted: 1,
       });
-      expect(await store.listByOwner(system("owner-a"))).toEqual([principals]);
+      expect(await listedKeys(store, system("owner-a"))).toEqual([principals]);
       expect(await store.deleteByOwner(system("owner-a"))).toEqual({
         deleted: 1,
       });
@@ -317,7 +331,7 @@ export function describeApiKeyStoreContract(
       await expect(store.insert(key, { signal })).rejects.toThrow(
         "aborted by the test",
       );
-      expect(await store.listByOwner(user("owner-a"))).toEqual([]);
+      expect(await listedKeys(store, user("owner-a"))).toEqual([]);
       await store.insert(key);
       await expect(store.findByHash(key.keyHash, { signal })).rejects.toThrow(
         "aborted",

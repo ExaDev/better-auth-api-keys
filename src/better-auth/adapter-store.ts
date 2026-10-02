@@ -3,6 +3,7 @@ import * as z from "zod/mini";
 import {
   API_KEYS_CONTRACT_VERSION,
   storedApiKeySchema,
+  type ApiKeyListing,
   type ApiKeyOwner,
   type ApiKeyStore,
   type StoredApiKey,
@@ -63,6 +64,20 @@ function storedKeyOf(row: unknown): StoredApiKey {
     createdBy: parsed.createdBy ?? undefined,
     lastUsedAt: parsed.lastUsedAt ?? undefined,
   });
+}
+
+/**
+ * A row read while listing an owner's keys: the stored key, or, when the row cannot be read as one, its id, so the rest of the owner's keys still list and this one can be revoked. A row without even a string id is not a row of this model at all, so that still throws.
+ */
+function listingOf(row: unknown): ApiKeyListing {
+  try {
+    return { outcome: "stored", key: storedKeyOf(row) };
+  } catch (error) {
+    const identified = z.safeParse(z.object({ id: z.string() }), row);
+    if (!identified.success) throw error;
+
+    return { outcome: "malformed", id: identified.data.id };
+  }
 }
 
 /** Matches `owner`'s keys, by kind and id, so a person and a principal with the same id never match each other's keys. */
@@ -150,7 +165,7 @@ export function createAdapterApiKeyStore(
 
     async listByOwner(owner, options) {
       /** The owner's keys from `offset` on, one page per call: each page's offset depends on the previous page having been full, so the pages are read in turn. */
-      const keysFrom = async (offset: number): Promise<StoredApiKey[]> => {
+      const keysFrom = async (offset: number): Promise<ApiKeyListing[]> => {
         options?.signal?.throwIfAborted();
         const page = await adapterOf().findMany({
           model: API_KEY_MODEL,
@@ -159,7 +174,7 @@ export function createAdapterApiKeyStore(
           limit: LIST_PAGE_SIZE,
           offset,
         });
-        const keys = page.map(storedKeyOf);
+        const keys = page.map(listingOf);
 
         return page.length < LIST_PAGE_SIZE
           ? keys

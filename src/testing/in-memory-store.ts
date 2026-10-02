@@ -62,7 +62,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
       return settleUnlessAborted(options, () =>
         [...keys.values()]
           .filter((key) => isSameOwner(key.owner, owner))
-          .map((key) => structuredClone(key)),
+          .map((key) => ({ outcome: "stored", key: structuredClone(key) })),
       );
     },
 

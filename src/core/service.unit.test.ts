@@ -24,7 +24,12 @@ import {
   type TestClaims,
   type TestScopes,
 } from "../test-support/service-fixture.ts";
-import { storedKey, system, user } from "../test-support/store-contract.ts";
+import {
+  listedKeys,
+  storedKey,
+  system,
+  user,
+} from "../test-support/store-contract.ts";
 import { createWebCryptoKeyHasher } from "../web-crypto/index.ts";
 import { createApiKeyService, type CreateApiKeyInput } from "./service.ts";
 
@@ -124,7 +129,7 @@ describe("ApiKeyService.create", () => {
     expect(created.key.id).toMatch(
       new RegExp(`^[0-9A-Za-z]{${KEY_ID_LENGTH}}$`, "u"),
     );
-    const [stored] = await store.listByOwner(user("alice"));
+    const [stored] = await listedKeys(store, user("alice"));
     expect(stored?.keyHash).toMatch(/^[0-9a-f]{64}$/u);
     expect(JSON.stringify(stored)).not.toContain(
       created.plaintext.slice(TEST_PREFIX.length),
@@ -175,7 +180,7 @@ describe("ApiKeyService.create", () => {
       outcome: "invalid",
       field,
     });
-    expect(await store.listByOwner(user("alice"))).toEqual([]);
+    expect(await listedKeys(store, user("alice"))).toEqual([]);
   });
 
   it("accepts a name of the maximum length and a lifetime of exactly the maximum", async () => {
@@ -250,7 +255,7 @@ describe("ApiKeyService.verify", () => {
     const { service } = serviceFixture({ store });
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
-    const [stored] = await store.listByOwner(user("alice"));
+    const [stored] = await listedKeys(store, user("alice"));
     if (stored === undefined) throw new Error("not stored");
     const hasher = createWebCryptoKeyHasher("test pepper");
 
@@ -291,7 +296,7 @@ describe("ApiKeyService.verify", () => {
     expect((await service.verify(created.plaintext)).outcome).toBe("valid");
     expect(calls.some((call) => call.method === "touchLastUsed")).toBe(false);
     expect(
-      (await store.listByOwner(user("alice")))[0]?.lastUsedAt,
+      (await listedKeys(store, user("alice")))[0]?.lastUsedAt,
     ).toBeUndefined();
   });
 });
@@ -316,7 +321,7 @@ describe("ApiKeyService.recordUse", () => {
     const created = await service.create(input());
     if (created.outcome !== "created") throw new Error(created.outcome);
     const lastUsed = async () =>
-      (await store.listByOwner(user("alice")))[0]?.lastUsedAt;
+      (await listedKeys(store, user("alice")))[0]?.lastUsedAt;
 
     await useKey(service, created.plaintext, defer);
     expect(deferred).toHaveLength(1);
@@ -391,7 +396,13 @@ describe("ApiKeyService.list", () => {
     await service.create(input({ name: "second" }));
     await service.create(input({ owner: bob, name: "bob's" }));
     const listed = await service.list(alice);
-    expect(listed.map((entry) => [entry.status, entry.key.name])).toEqual([
+    expect(
+      listed.map((entry) =>
+        entry.status === "malformed"
+          ? [entry.status, entry.id]
+          : [entry.status, entry.key.name],
+      ),
+    ).toEqual([
       ["valid", "second"],
       ["valid", "first"],
     ]);
@@ -568,8 +579,8 @@ describe("system principals' keys", () => {
       createdBy: "alice",
       expiresAt: new Date(TEST_START.getTime() + LIFETIME_MS),
     });
-    expect(await store.listByOwner(system("deployer"))).toHaveLength(1);
-    expect(await store.listByOwner(user("deployer"))).toEqual([]);
+    expect(await listedKeys(store, system("deployer"))).toHaveLength(1);
+    expect(await listedKeys(store, user("deployer"))).toEqual([]);
     const verified = await service.verify(created.plaintext);
     expect(verified).toEqual({ outcome: "valid", key: created.key });
   });
@@ -743,7 +754,7 @@ describe("system principals' keys", () => {
         field: "lifetime",
       });
     }
-    expect(await store.listByOwner(user("alice"))).toEqual([]);
+    expect(await listedKeys(store, user("alice"))).toEqual([]);
   });
 
   it.each([
@@ -754,7 +765,7 @@ describe("system principals' keys", () => {
     expect(
       await service.create(input({ owner: deployer, lifetimeMs: null })),
     ).toEqual({ outcome: "invalid", field: "lifetime" });
-    expect(await store.listByOwner(system("deployer"))).toEqual([]);
+    expect(await listedKeys(store, system("deployer"))).toEqual([]);
   });
 
   it("creates a principal's key with no expiry when the host allows it, which never expires", async () => {
@@ -789,7 +800,7 @@ describe("system principals' keys", () => {
     if (principals.outcome !== "created" || persons.outcome !== "created") {
       throw new Error("not created");
     }
-    const [storedPersons] = await store.listByOwner(user("alice"));
+    const [storedPersons] = await listedKeys(store, user("alice"));
     if (storedPersons === undefined) throw new Error("not stored");
     await store.delete({ id: storedPersons.id });
     await store.insert({ ...storedPersons, expiresAt: null });
@@ -834,7 +845,7 @@ describe("system principals' keys", () => {
     expect(await use()).toEqual({ outcome: "scheduled" });
     expect(await deferred[1]).toEqual({ outcome: "touched" });
     expect(
-      (await store.listByOwner(system("deployer")))[0]?.lastUsedAt,
+      (await listedKeys(store, system("deployer")))[0]?.lastUsedAt,
     ).toEqual(new Date(TEST_START.getTime() + TEST_LAST_USED_INTERVAL_MS + 1));
   });
 });
