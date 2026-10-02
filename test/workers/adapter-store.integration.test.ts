@@ -307,7 +307,10 @@ describe("the plugin on D1", () => {
 
 describe("upgrading a 0.1.0 database", () => {
   /** A 0.1.0 key of `userId`'s, last used at `TEST_START`, with its plaintext. */
-  async function insertV0_1_0Key(id: string, userId: string, seed: number) {
+  /** Each key's random source starts from the next seed, so every key a test inserts is distinct and every run replays exactly. */
+  let seed = 0;
+  async function insertV0_1_0Key(id: string, userId: string) {
+    seed++;
     const plaintext = await generateKey(TEST_PREFIX, seededRandomSource(seed));
     const keyHash = await createWebCryptoKeyHasher(TEST_PEPPER).hash(plaintext);
     const expiresAt = TEST_START.getTime() + LIFETIME_MS;
@@ -333,7 +336,7 @@ describe("upgrading a 0.1.0 database", () => {
   it("gives the plain SQLite migration exactly the D1 file's statements, inside one transaction", () => {
     const { d1, sqlite } = readmeMigration();
     expect(statementsOf(d1).length).toBeGreaterThan(0);
-    expect(sqlite).toBe(`BEGIN;\n${d1}COMMIT;\n`);
+    expect(sqlite).toBe(`PRAGMA foreign_keys = ON;\nBEGIN;\n${d1}COMMIT;\n`);
   });
 
   it("keeps a person's key, with its last use, verifying after the README's migration, builds the declared table, and then accepts system keys", async () => {
@@ -341,11 +344,7 @@ describe("upgrading a 0.1.0 database", () => {
     const declared = await describeApiKeyTable();
     await resetToV0_1_0();
     await addUser("alice");
-    const { plaintext, expiresAt } = await insertV0_1_0Key(
-      "old-key",
-      "alice",
-      1,
-    );
+    const { plaintext, expiresAt } = await insertV0_1_0Key("old-key", "alice");
 
     await migrateFromV0_1_0();
 
@@ -377,7 +376,7 @@ describe("upgrading a 0.1.0 database", () => {
   it("enforces the owner check, the unique name per owner and the cascading delete on the migrated table", async () => {
     await resetToV0_1_0();
     await addUser("alice");
-    const { plaintext } = await insertV0_1_0Key("old-key", "alice", 1);
+    const { plaintext } = await insertV0_1_0Key("old-key", "alice");
     await migrateFromV0_1_0();
 
     const insert = env.DATABASE.prepare(
@@ -403,11 +402,36 @@ describe("upgrading a 0.1.0 database", () => {
     expect(remaining.results).toEqual([{ id: "principals" }]);
   });
 
+  it("deletes only the keys whose person is gone with the README's statement, after which the migration succeeds", async () => {
+    await resetToV0_1_0({ foreignKeys: false });
+    await addUser("alice");
+    await addUser("bob");
+    await insertV0_1_0Key("alices", "alice");
+    await insertV0_1_0Key("bobs", "bob");
+    await insertV0_1_0Key("orphaned", "nobody");
+
+    await env.DATABASE.batch(
+      statementsOf(readmeMigration().deleteOrphans).map((statement) =>
+        env.DATABASE.prepare(statement),
+      ),
+    );
+    const kept = await env.DATABASE.prepare(
+      "SELECT id FROM api_key ORDER BY id",
+    ).all();
+    expect(kept.results).toEqual([{ id: "alices" }, { id: "bobs" }]);
+
+    await migrateFromV0_1_0();
+    const migrated = await env.DATABASE.prepare(
+      "SELECT id FROM api_key ORDER BY id",
+    ).all();
+    expect(migrated.results).toEqual([{ id: "alices" }, { id: "bobs" }]);
+  });
+
   it("changes nothing when a key whose person is gone makes the copy fail", async () => {
     await resetToV0_1_0({ foreignKeys: false });
     await addUser("alice");
-    await insertV0_1_0Key("kept", "alice", 1);
-    await insertV0_1_0Key("orphaned", "nobody", 2);
+    await insertV0_1_0Key("kept", "alice");
+    await insertV0_1_0Key("orphaned", "nobody");
 
     await expect(migrateFromV0_1_0()).rejects.toThrow(
       "FOREIGN KEY constraint failed",

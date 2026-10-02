@@ -129,9 +129,10 @@ CREATE UNIQUE INDEX api_key_owner_name ON api_key (owner_kind, owner_id, name);
 CREATE INDEX api_key_user_id ON api_key (user_id);
 ```
 
-On plain SQLite, run the same statements in one transaction (D1 refuses `BEGIN`, which is why its file has none):
+On plain SQLite, run the same statements in one transaction, with foreign keys enforced (D1 refuses `BEGIN`, which is why its file has none, and always enforces foreign keys; SQLite leaves them off on each new connection and ignores the pragma inside a transaction, so it comes first):
 
 ```sql
+PRAGMA foreign_keys = ON;
 BEGIN;
 CREATE TABLE api_key_new (
   id text PRIMARY KEY,
@@ -161,7 +162,15 @@ CREATE INDEX api_key_user_id ON api_key (user_id);
 COMMIT;
 ```
 
-Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. A database that once ran without foreign-key enforcement may hold keys whose person no longer exists; the copy fails on them, rolling the whole migration back, so delete them first (`DELETE FROM api_key WHERE user_id NOT IN (SELECT id FROM user);`). The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), `created_by`, make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
+A database that once ran without foreign-key enforcement may hold keys whose person no longer exists. When foreign keys are enforced (always on D1; on plain SQLite once `PRAGMA foreign_keys = ON` has run before `BEGIN`), the copy fails on them and the whole migration rolls back, changing nothing; on plain SQLite without the pragma, the copy keeps them silently. Either way, delete them before migrating:
+
+```sql
+DELETE FROM api_key WHERE user_id NOT IN (SELECT id FROM user);
+```
+
+On 0.1.0's table this deletes only keys whose person is gone: every key has a `user_id`, and `user.id` is never null, so `NOT IN` matches exactly the orphans.
+
+Nothing references `api_key`, so dropping the old table needs no foreign-key pragma, and dropping it also drops its old `(user_id, name)` index. The Workers tests run exactly these statements against a 0.1.0 table and check that its keys still verify. On a database that can alter columns in place, the same change is: add `owner_kind` and `owner_id` (filled with `'user'` and `user_id`, then made `NOT NULL`), `created_by`, make `user_id` and `expires_at` nullable, replace the `(user_id, name)` unique index with `(owner_kind, owner_id, name)`, index `user_id`, and add the check.
 
 The Drizzle declaration matching the migration:
 
