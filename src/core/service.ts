@@ -73,7 +73,7 @@ export interface ApiKeyServiceOptions<
 }
 
 /**
- * What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`; `null` creates a key that never expires, which is refused unless the owner is a system principal and the service's `allowNonExpiringSystemKeys` is on.
+ * What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`; `null` creates a key that never expires, which is refused unless the owner is a system principal and the service's `allowNonExpiringSystemKeys` is on. `createdBy` names who created the key, as plain text the package stores and never resolves.
  */
 export interface CreateApiKeyInput<Scopes, Claims> {
   readonly owner: ApiKeyOwnerInput;
@@ -81,11 +81,12 @@ export interface CreateApiKeyInput<Scopes, Claims> {
   readonly lifetimeMs: number | null;
   readonly scopes: Scopes;
   readonly claims: Claims;
+  readonly createdBy?: string | undefined;
 }
 
 /** Which part of a {@link CreateApiKeyInput} was refused. */
 export type InvalidApiKeyField =
-  "owner" | "name" | "lifetime" | "scopes" | "claims";
+  "owner" | "name" | "lifetime" | "scopes" | "claims" | "createdBy";
 
 /** The result of {@link ApiKeyService.create}. `plaintext` is the key itself, returned here once and never again: only its hash is stored. */
 export type CreateApiKeyResult<Scopes, Claims> =
@@ -189,6 +190,7 @@ function summaryOf(stored: StoredApiKey): ApiKeySummary {
     start: stored.start,
     createdAt: stored.createdAt,
     expiresAt: stored.expiresAt,
+    createdBy: stored.createdBy,
     lastUsedAt: stored.lastUsedAt,
   };
 }
@@ -197,6 +199,9 @@ function summaryOf(stored: StoredApiKey): ApiKeySummary {
 function ownerOf(owner: Readonly<ApiKeyOwnerInput>): ApiKeyOwner {
   return z.parse(apiKeyOwnerSchema, owner);
 }
+
+/** Who created a key, when the host says: any non-empty text, never resolved against a table. */
+const createdBySchema = z.optional(z.string().check(z.minLength(1)));
 
 /**
  * Builds the API-key service over its ports. Pure domain logic: it reads time only from `clock`, randomness only from `random` and hashes only through `hasher`, and passes each call's `signal` to every port it calls. Throws if the settings are unusable.
@@ -271,6 +276,8 @@ export function createApiKeyService<
       if (!scopes.success) return { outcome: "invalid", field: "scopes" };
       const claims = z.safeParse(options.claims, input.claims);
       if (!claims.success) return { outcome: "invalid", field: "claims" };
+      const createdBy = z.safeParse(createdBySchema, input.createdBy);
+      if (!createdBy.success) return { outcome: "invalid", field: "createdBy" };
 
       const now = await clock.now(callOptions);
       const plaintext = await generateKey(prefix, random, callOptions);
@@ -285,6 +292,7 @@ export function createApiKeyService<
         createdAt: now,
         expiresAt:
           lifetime.ms === null ? null : new Date(now.getTime() + lifetime.ms),
+        createdBy: createdBy.data,
         lastUsedAt: undefined,
       };
       const inserted = await store.insert(stored, callOptions);

@@ -28,6 +28,7 @@ const apiKeyRowSchema = z.object({
   createdAt: z.date(),
   /** `null` for a key with no expiry, but never absent: a row missing the field is malformed, not a key that never expires. */
   expiresAt: z.nullable(z.date()),
+  createdBy: z.nullish(z.string()),
   lastUsedAt: z.nullish(z.date()),
 });
 
@@ -59,6 +60,7 @@ function storedKeyOf(row: unknown): StoredApiKey {
     claims: parsed.claims,
     createdAt: parsed.createdAt,
     expiresAt: parsed.expiresAt,
+    createdBy: parsed.createdBy ?? undefined,
     lastUsedAt: parsed.lastUsedAt ?? undefined,
   });
 }
@@ -114,6 +116,7 @@ export function createAdapterApiKeyStore(
         claims: key.claims,
         createdAt: key.createdAt,
         expiresAt: key.expiresAt,
+        createdBy: key.createdBy ?? null,
         lastUsedAt: key.lastUsedAt ?? null,
       };
       try {

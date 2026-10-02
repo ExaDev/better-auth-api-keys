@@ -136,6 +136,7 @@ describe("the plugin on D1", () => {
       owner: { kind: "system", id: "deployer" },
       name: "deploys",
       lifetimeMs: null,
+      createdBy: "alice",
     });
     const sameId = await service.create({
       ...common,
@@ -166,6 +167,7 @@ describe("the plugin on D1", () => {
     expect(principals.key).toMatchObject({
       owner: { kind: "system", id: "deployer" },
       expiresAt: null,
+      createdBy: "alice",
     });
     expect(await service.verify(sameId.plaintext)).toEqual({
       outcome: "valid",
