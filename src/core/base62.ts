@@ -23,6 +23,7 @@ export function isBase62(value: string): boolean {
   for (const character of value) {
     if (!BASE62_ALPHABET.includes(character)) return false;
   }
+
   return true;
 }
 
@@ -44,6 +45,7 @@ export function encodeBase62FixedWidth(value: number, width: number): string {
   if (remaining !== 0) {
     throw new RangeError(`${value} does not fit in ${width} base62 characters`);
   }
+
   return encoded;
 }
 
@@ -56,13 +58,15 @@ export async function randomBase62(
   options?: PortCallOptions,
 ): Promise<string> {
   let result = "";
-  while (result.length < length) {
-    const bytes = await random.bytes(length - result.length, options);
-    for (const byte of bytes) {
-      if (byte < REJECTION_BOUND && result.length < length) {
-        result += BASE62_ALPHABET.charAt(byte % BASE62_ALPHABET.length);
-      }
+  const bytes = await random.bytes(length, options);
+  for (const byte of bytes) {
+    if (byte < REJECTION_BOUND && result.length < length) {
+      result += BASE62_ALPHABET.charAt(byte % BASE62_ALPHABET.length);
     }
   }
-  return result;
+
+  // Each round asks only for the characters the rejected bytes left missing, so the rounds run in turn rather than together.
+  return result.length < length
+    ? result + (await randomBase62(length - result.length, random, options))
+    : result;
 }

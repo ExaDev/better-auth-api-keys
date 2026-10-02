@@ -36,6 +36,7 @@ export async function generateKey(
   options?: PortCallOptions,
 ): Promise<string> {
   const prefixAndRandom = `${prefix}${await randomBase62(KEY_RANDOM_LENGTH, random, options)}`;
+
   return `${prefixAndRandom}${checksumOf(prefixAndRandom)}`;
 }
 
@@ -53,6 +54,7 @@ export function hasKeyFormat(prefix: string, presented: string): boolean {
   const body = presented.slice(prefix.length);
   if (!isBase62(body)) return false;
   const checksumStart = presented.length - KEY_CHECKSUM_LENGTH;
+
   return (
     checksumOf(presented.slice(0, checksumStart)) ===
     presented.slice(checksumStart)

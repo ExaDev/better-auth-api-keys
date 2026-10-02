@@ -26,6 +26,7 @@ export function createWebCryptoKeyHasher(pepper: string): KeyHasher {
     throw new Error("An API key pepper must not be empty");
   }
   let cryptoKey: Promise<CryptoKey> | undefined;
+
   return {
     version: API_KEYS_CONTRACT_VERSION,
     async hash(key, options) {
@@ -43,6 +44,7 @@ export function createWebCryptoKeyHasher(pepper: string): KeyHasher {
         textEncoder.encode(key),
       );
       options?.signal?.throwIfAborted();
+
       return toHex(digest);
     },
   };

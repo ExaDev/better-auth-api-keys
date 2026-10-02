@@ -34,6 +34,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
           throw new Error("An API key with this id or hash is already stored");
         }
         keys.set(key.id, structuredClone(key));
+
         return { outcome: "inserted" };
       });
     },
@@ -43,6 +44,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
         const key = [...keys.values()].find(
           (candidate) => candidate.keyHash === keyHash,
         );
+
         return key === undefined
           ? { outcome: "not-found" }
           : { outcome: "found", key: structuredClone(key) };
@@ -67,6 +69,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
           return { outcome: "not-found" };
         }
         keys.delete(target.id);
+
         return { outcome: "deleted" };
       });
     },
@@ -77,6 +80,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
           (key) => key.ownerId === ownerId,
         );
         for (const key of owned) keys.delete(key.id);
+
         return { deleted: owned.length };
       });
     },
@@ -88,6 +92,7 @@ export function createInMemoryApiKeyStore(): ApiKeyStore {
           return { outcome: "unchanged" };
         }
         keys.set(id, { ...key, lastUsedAt: new Date(at) });
+
         return { outcome: "touched" };
       });
     },

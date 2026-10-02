@@ -17,6 +17,7 @@ const CRC32_TABLE: readonly number[] = Array.from(
     for (let bit = 0; bit < BITS_PER_BYTE; bit++) {
       value = value & 1 ? (value >>> 1) ^ CRC32_POLYNOMIAL : value >>> 1;
     }
+
     return value >>> 0;
   },
 );
@@ -35,5 +36,6 @@ export function crc32(text: string): number {
     }
     crc = (crc >>> BITS_PER_BYTE) ^ entry;
   }
+
   return (crc ^ CRC32_ALL_ONES) >>> 0;
 }

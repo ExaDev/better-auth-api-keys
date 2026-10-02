@@ -20,6 +20,7 @@ export function storedKey(
   overrides: Partial<StoredApiKey> = {},
 ): StoredApiKey {
   sequence++;
+
   return {
     id: `key-${sequence}`,
     ownerId,
@@ -38,6 +39,7 @@ export function storedKey(
 function aborted(): AbortSignal {
   const controller = new AbortController();
   controller.abort(new Error("aborted by the test"));
+
   return controller.signal;
 }
 
@@ -99,7 +101,7 @@ export function describeApiKeyStoreContract(
       const owned = Array.from({ length: KEYS_BEYOND_ONE_PAGE }, () =>
         storedKey("owner-a"),
       );
-      for (const key of owned) await store.insert(key);
+      await Promise.all(owned.map(async (key) => store.insert(key)));
       await store.insert(storedKey("owner-b"));
       const listed = await store.listByOwner("owner-a");
       expect(listed.map((key) => key.id).sort()).toEqual(

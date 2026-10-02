@@ -30,6 +30,7 @@ const apiKeyRowSchema = z.object({
 /** Turns an adapter row into a stored key, throwing if the row does not have the model's shape: a malformed row is a broken database, never a key to guess at. */
 function storedKeyOf(row: unknown): StoredApiKey {
   const parsed = z.parse(apiKeyRowSchema, row);
+
   return z.parse(storedApiKeySchema, {
     id: parsed.id,
     ownerId: parsed.userId,
@@ -103,6 +104,7 @@ export function createAdapterApiKeyStore(
         }
         throw error;
       }
+
       return { outcome: "inserted" };
     },
 
@@ -112,14 +114,15 @@ export function createAdapterApiKeyStore(
         model: API_KEY_MODEL,
         where: [{ field: "keyHash", value: keyHash }],
       });
+
       return row === null
         ? { outcome: "not-found" }
         : { outcome: "found", key: storedKeyOf(row) };
     },
 
     async listByOwner(ownerId, options) {
-      const keys: StoredApiKey[] = [];
-      for (let offset = 0; ; offset += LIST_PAGE_SIZE) {
+      /** The owner's keys from `offset` on, one page per call: each page's offset depends on the previous page having been full, so the pages are read in turn. */
+      const keysFrom = async (offset: number): Promise<StoredApiKey[]> => {
         options?.signal?.throwIfAborted();
         const page = await adapterOf().findMany({
           model: API_KEY_MODEL,
@@ -128,9 +131,14 @@ export function createAdapterApiKeyStore(
           limit: LIST_PAGE_SIZE,
           offset,
         });
-        keys.push(...page.map(storedKeyOf));
-        if (page.length < LIST_PAGE_SIZE) return keys;
-      }
+        const keys = page.map(storedKeyOf);
+
+        return page.length < LIST_PAGE_SIZE
+          ? keys
+          : [...keys, ...(await keysFrom(offset + LIST_PAGE_SIZE))];
+      };
+
+      return keysFrom(0);
     },
 
     async delete(target, options) {
@@ -143,6 +151,7 @@ export function createAdapterApiKeyStore(
         model: API_KEY_MODEL,
         where,
       });
+
       return deleted > 0 ? { outcome: "deleted" } : { outcome: "not-found" };
     },
 
@@ -152,6 +161,7 @@ export function createAdapterApiKeyStore(
         model: API_KEY_MODEL,
         where: [{ field: "userId", value: ownerId }],
       });
+
       return { deleted };
     },
 
@@ -177,6 +187,7 @@ export function createAdapterApiKeyStore(
         ],
         update,
       });
+
       return neverUsed > 0 ? { outcome: "touched" } : { outcome: "unchanged" };
     },
   };

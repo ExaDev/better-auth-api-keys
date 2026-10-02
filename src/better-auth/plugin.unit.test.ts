@@ -202,6 +202,7 @@ describeApiKeyStoreContract(
   "the adapter store over better-auth's memory adapter",
   async () => {
     const context = await authWith({ plugins: [testPlugin()] }).$context;
+
     return {
       store: createAdapterApiKeyStore(() => context.adapter),
       addOwner: async (ownerId) => {

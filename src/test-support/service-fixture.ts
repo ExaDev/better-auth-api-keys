@@ -68,30 +68,37 @@ function spiedStore(
   const note = (method: string, options: PortCallOptions | undefined) => {
     record({ port: "store", method, signal: options?.signal });
   };
+
   return {
     version: store.version,
     insert: async (key, options) => {
       note("insert", options);
+
       return store.insert(key, options);
     },
     findByHash: async (keyHash, options) => {
       note("findByHash", options);
+
       return store.findByHash(keyHash, options);
     },
     listByOwner: async (ownerId, options) => {
       note("listByOwner", options);
+
       return store.listByOwner(ownerId, options);
     },
     delete: async (target, options) => {
       note("delete", options);
+
       return store.delete(target, options);
     },
     deleteByOwner: async (ownerId, options) => {
       note("deleteByOwner", options);
+
       return store.deleteByOwner(ownerId, options);
     },
     touchLastUsed: async (id, at, notSince, options) => {
       note("touchLastUsed", options);
+
       return store.touchLastUsed(id, at, notSince, options);
     },
   };
@@ -102,6 +109,7 @@ function spiedHasher(hasher: Readonly<KeyHasher>, record: Recorder): KeyHasher {
     version: hasher.version,
     hash: async (key, options) => {
       record({ port: "hasher", method: "hash", signal: options?.signal });
+
       return hasher.hash(key, options);
     },
   };
@@ -115,6 +123,7 @@ function spiedRandom(
     version: random.version,
     bytes: async (length, options) => {
       record({ port: "random", method: "bytes", signal: options?.signal });
+
       return random.bytes(length, options);
     },
   };
@@ -125,6 +134,7 @@ function spiedClock(clock: Readonly<Clock>, record: Recorder): Clock {
     version: clock.version,
     now: async (options) => {
       record({ port: "clock", method: "now", signal: options?.signal });
+
       return clock.now(options);
     },
   };
@@ -151,6 +161,7 @@ export function serviceFixture(options: { readonly store?: ApiKeyStore } = {}) {
     claims: testClaimsSchema,
     authoriser: testAuthoriser,
   });
+
   return {
     service,
     store,
