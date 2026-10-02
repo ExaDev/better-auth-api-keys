@@ -27,6 +27,7 @@ import { createWebCryptoKeyHasher } from "../../src/web-crypto/index.ts";
 import {
   addUser,
   d1Auth,
+  describeApiKeyTable,
   migrateFromV0_1_0,
   resetDatabase,
   resetToV0_1_0,
@@ -305,6 +306,8 @@ describe("the plugin on D1", () => {
 
 describe("upgrading a 0.1.0 database", () => {
   it("keeps a person's key verifying after the README's migration, and then accepts system keys", async () => {
+    await resetDatabase();
+    const declared = await describeApiKeyTable();
     await resetToV0_1_0();
     await addUser("alice");
     const plaintext = await generateKey(TEST_PREFIX, seededRandomSource(1));
@@ -325,11 +328,10 @@ describe("upgrading a 0.1.0 database", () => {
 
     await migrateFromV0_1_0();
 
+    // better-auth's Drizzle schema check compares the plugin's schema with the Drizzle declaration, never the database, so it cannot tell whether the migration ran; the database's own description of the table can.
+    expect(await describeApiKeyTable()).toEqual(declared);
     const plugin = testPlugin();
     const context = await d1Auth(plugin).$context;
-    if (context.checkSchema === undefined)
-      throw new Error("The Drizzle adapter registers a schema check");
-    await expect(context.checkSchema()).resolves.toBeUndefined();
     const service = apiKeysOf(context, plugin);
     const verified = await service.verify(plaintext);
     expect(verified).toMatchObject({

@@ -95,7 +95,7 @@ better-auth's schema cannot express a check across columns, so the adapter-backe
 
 ### Upgrading from 0.1.0
 
-0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none). On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's.
+0.1.0 stored every key as a person's, with `userId` and `expiresAt` required. Upgrading needs a migration in the host's own tool (the package ships none). better-auth's schema check will not tell you it is missing: with the Drizzle adapter it compares the plugin's schema with the host's Drizzle declaration, not with the database, so it catches a declaration left on 0.1.0 but not a migration that never ran. On SQLite and D1, which cannot relax `NOT NULL` in place, the table is rebuilt and its rows copied, each existing key becoming its person's.
 
 Run the migration before deploying code on 0.2.0. Code on 0.1.0 against the migrated table still verifies people's keys but cannot create any, since it writes no owner columns; code on 0.2.0 against the old table fails every read and write. So the order is: migrate, then deploy.
 
