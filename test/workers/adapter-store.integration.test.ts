@@ -364,6 +364,15 @@ describe("upgrading a 0.1.0 database", () => {
 
     // The database's own description of the migrated table, compared with the table the hand-written API_KEY_TABLE statements build (which the Drizzle declaration in d1-fixture.ts mirrors, and better-auth's schema check compares with the plugin). better-auth's Drizzle schema check never reads the database, so it cannot tell whether a migration ran.
     expect(await describeApiKeyTable()).toEqual(declared);
+    // The comparison covers key_hash's UNIQUE constraint only because the description reports it per column; its index is SQLite's own, not one CREATE INDEX made.
+    expect(
+      declared.columns.filter((column) =>
+        ["key_hash", "name"].includes(String(column.name)),
+      ),
+    ).toEqual([
+      { name: "name", type: "TEXT", notnull: 1, pk: 0, unique: 0 },
+      { name: "key_hash", type: "TEXT", notnull: 1, pk: 0, unique: 1 },
+    ]);
     expect(
       await env.DATABASE.prepare("SELECT * FROM api_key WHERE id = ?")
         .bind(row.id)
