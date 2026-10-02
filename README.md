@@ -162,7 +162,7 @@ export const apiKey = sqliteTable(
 );
 ```
 
-Every owner the host passes to the service needs its `kind` now: 0.1.0's `{ id }` is refused, so each call site says `{ kind: "user", id }` for a person. Keys and the `expired` result carry `owner` in place of 0.1.0's `ownerId`, so every read of `ownerId` becomes `owner.id` after a check of `owner.kind`. Two types widen: `expiresAt` is `Date | null`, and `create`'s `lifetimeMs` accepts `null`. A custom `ApiKeyStore` takes owners rather than owner ids and stores `owner`, `createdBy` and a nullable `expiresAt`, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
+Every owner the host passes to the service needs its `kind` now: 0.1.0's `{ id }` is refused, so each call site says `{ kind: "user", id }` for a person. Keys and the `expired` result carry `owner` in place of 0.1.0's `ownerId`, so every read of `ownerId` becomes `owner.id` after a check of `owner.kind`. Two types widen: `expiresAt` is `Date | null`, and `create`'s `lifetimeMs` accepts `null`. `list` can also return a `malformed` entry, which has an `id` and `owner` but no `key`. A custom `ApiKeyStore` takes owners rather than owner ids, stores `owner`, `createdBy` and a nullable `expiresAt`, and returns `listByOwner`'s keys as `{ outcome: "stored", key }` listings, so `API_KEYS_CONTRACT_VERSION` is now 2 and a store written for 1 stops type-checking.
 
 ## Entry points
 
