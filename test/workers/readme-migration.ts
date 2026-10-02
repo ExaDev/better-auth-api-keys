@@ -1,9 +1,9 @@
 import readme from "../../README.md?raw";
 
-/** The README's section on upgrading from 0.1.0, which holds the migration as hosts copy it. */
-const UPGRADE_HEADING = "### Upgrading from 0.1.0";
+/** The README's section on migrating the database from 0.1.0, which holds the migration as hosts copy it. */
+const UPGRADE_HEADING = "### Migrating the database from 0.1.0";
 
-/** Every fenced SQL block in the upgrade section, in order: the D1 migration file, the same statements wrapped for plain SQLite, and the deletion of orphaned keys. */
+/** Every fenced SQL block in the migration section, in order: the D1 migration file, the same statements wrapped for plain SQLite, and the deletion of orphaned keys. */
 function upgradeSqlBlocks(): string[] {
   const start = readme.indexOf(UPGRADE_HEADING);
   if (start === -1) throw new Error(`The README has no "${UPGRADE_HEADING}"`);
@@ -35,7 +35,7 @@ export function readmeMigration(): {
     rest.length > 0
   ) {
     throw new Error(
-      "The README's upgrade section must hold exactly three SQL blocks",
+      "The README's migration section must hold exactly three SQL blocks",
     );
   }
 
