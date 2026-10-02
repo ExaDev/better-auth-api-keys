@@ -1,0 +1,39 @@
+name: Mutation testing
+
+# Stryker over the whole package, gated on the break threshold derived in stryker.config.ts. A pull request run checks a change before it merges; the daily run keeps main's result current as dependencies move; a dispatched run measures any ref on demand, which is how the threshold is re-derived. The package is small enough to mutate whole in one job, so there is no slicing, and no incremental cache: Stryker cannot tell when a test changed (see stryker.config.ts). The result is reported by this workflow's own check and is not one of main's required checks.
+
+on:
+  pull_request:
+  schedule:
+    # Once a day, off the hour so it does not queue with the many other schedules that fire on it.
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+# A newer push to a pull request cancels that pull request's stale run; scheduled and dispatched runs share one group per ref and are never cancelled.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('mutation-pr-{0}', github.event.pull_request.number) || format('mutation-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Mutation testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:mutation
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          if-no-files-found: ignore
