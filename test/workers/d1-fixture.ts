@@ -173,10 +173,22 @@ export async function migrateFromV0_1_0(): Promise<void> {
   await run(statementsOf(readmeMigration().d1));
 }
 
-/** The `api_key` table as the database itself describes it: each column's name, type, nullability and key, and each index's name, uniqueness and columns. Read from the live database, so it shows what a migration actually built rather than what any declaration says. */
-export async function describeApiKeyTable(): Promise<unknown> {
+/**
+ * The `api_key` table as the database itself describes it: each column's name, type, nullability, key and whether a unique index covers that column alone (a `UNIQUE` column constraint or a single-column unique index), and each index created by `CREATE INDEX` with its uniqueness and columns. Read from the live database, so it shows what a migration actually built rather than what any declaration says.
+ */
+export async function describeApiKeyTable(): Promise<{
+  readonly columns: readonly Record<string, unknown>[];
+  readonly indexes: readonly Record<string, unknown>[];
+}> {
   const columns = await env.DATABASE.prepare(
-    "SELECT name, type, \"notnull\", pk FROM pragma_table_info('api_key') ORDER BY cid",
+    `SELECT ti.name, ti.type, ti."notnull", ti.pk,
+       EXISTS (
+         SELECT 1 FROM pragma_index_list('api_key') AS il
+         WHERE il."unique" = 1
+           AND (SELECT count(*) FROM pragma_index_info(il.name)) = 1
+           AND (SELECT name FROM pragma_index_info(il.name)) = ti.name
+       ) AS "unique"
+     FROM pragma_table_info('api_key') AS ti ORDER BY ti.cid`,
   ).all();
   const indexes = await env.DATABASE.prepare(
     "SELECT il.name, il.\"unique\", group_concat(ii.name, ',') AS columns FROM pragma_index_list('api_key') AS il, pragma_index_info(il.name) AS ii WHERE il.origin = 'c' GROUP BY il.name ORDER BY il.name",
