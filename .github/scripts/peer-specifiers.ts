@@ -10,7 +10,7 @@ function isRangeEnd(value: string | undefined): value is RangeEnd {
 }
 
 /**
- * The `pnpm add` specifiers that install every peer at one end of its range: `name@x.y.z` for the floor of `^x.y.z`, and `name@^x.y.z` for the newest version it admits. Throws for a range that is not a plain caret range, since its floor would not be a single version.
+ * The `pnpm update` specifiers that install every peer at one end of its range: `name@x.y.z` for the floor of `^x.y.z`, and `name@^x.y.z` for the newest version it admits. Throws for a range that is not a plain caret range, since its floor would not be a single version.
  */
 export function peerSpecifiers(
   peers: Readonly<Record<string, string>>,

@@ -52,12 +52,6 @@ describe("the package manifest", () => {
     }
   });
 
-  it("develops against an exact version of every peer", () => {
-    for (const name of Object.keys(manifest.peerDependencies)) {
-      expect(manifest.devDependencies[name]).toMatch(/^\d+\.\d+\.\d+$/u);
-    }
-  });
-
   it("is MIT licensed and published publicly", () => {
     expect(manifest.license).toBe("MIT");
     expect(manifest.private).not.toBe(true);

@@ -68,7 +68,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
 
-  # Each test job runs three times: on the lockfile's versions, and with every peer (zod, better-auth, @better-auth/core) installed at the lowest and at the newest version its range in package.json admits, so a peer range never claims a version the tests have not run on. The ranges are read from package.json, so this list never restates them.
+  # Each test job runs three times: on the lockfile's versions, and with every peer (zod, better-auth, @better-auth/core) installed at the lowest and at the newest version its range in package.json admits (newest under the release-age policy in pnpm-workspace.yaml), so a peer range never claims a version the tests have not run on. The ranges are read from package.json, so this list never restates them.
   test:
     name: Test (${{ matrix.peers }})
     runs-on: ubuntu-latest
@@ -89,7 +89,8 @@ jobs:
         if: matrix.peers != 'lockfile'
         env:
           PEERS: ${{ matrix.peers }}
-        run: pnpm add -D $(node .github/scripts/peer-specifiers.ts "$PEERS")
+        # pnpm update, not pnpm add: add keeps a locked version that already satisfies the range it is given, so asking for a range would never move a peer to its newest version.
+        run: pnpm update $(node .github/scripts/peer-specifiers.ts "$PEERS")
       - run: pnpm test:coverage
 
   test-workers:
@@ -113,7 +114,8 @@ jobs:
         if: matrix.peers != 'lockfile'
         env:
           PEERS: ${{ matrix.peers }}
-        run: pnpm add -D $(node .github/scripts/peer-specifiers.ts "$PEERS")
+        # pnpm update, not pnpm add: add keeps a locked version that already satisfies the range it is given, so asking for a range would never move a peer to its newest version.
+        run: pnpm update $(node .github/scripts/peer-specifiers.ts "$PEERS")
       - run: pnpm test:workers
 
   build:
