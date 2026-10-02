@@ -221,7 +221,10 @@ jobs:
           if [ "$(jq -r .version package.json)" = "$BEFORE" ]; then
             echo "matrix=[]" >> "$GITHUB_OUTPUT"
           else
-            echo "matrix=$(node .github/scripts/alias-plan.ts "$(git describe --exact-match --tags HEAD)")" >> "$GITHUB_OUTPUT"
+            # Assigned first so a failing planner fails the step, which a command substitution inside echo would swallow.
+            RELEASE_TAG=$(git describe --exact-match --tags HEAD)
+            MATRIX=$(node .github/scripts/alias-plan.ts "$RELEASE_TAG")
+            echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           fi
 
   # Backfills the aliases for a release that already exists, from the alias_tag input of a manual run: for a release made before an alias was listed, or whose alias jobs failed. It only plans; publish-alias below does the publishing, with the same checks as after a release.
@@ -245,7 +248,10 @@ jobs:
         env:
           # Through the environment, not interpolated into the script, so the input is only ever data.
           TAG: ${{ inputs.alias_tag }}
-        run: echo "matrix=$(node .github/scripts/alias-plan.ts "$TAG")" >> "$GITHUB_OUTPUT"
+        # Assigned first so a failing planner fails the step, which a command substitution inside echo would swallow.
+        run: |
+          MATRIX=$(node .github/scripts/alias-plan.ts "$TAG")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
       - name: Confirm the tag's version is the primary package's latest release
         env:
           MATRIX: ${{ steps.plan.outputs.matrix }}
@@ -307,7 +313,8 @@ jobs:
         # npm refuses to publish a version twice, so a version the alias already has (a re-run, or a backfill of a version already published) is done, not failed. npm view fails the step for a name that is not on npm, since a trusted publisher can only be registered for a name that exists.
         run: |
           VERSIONS=$(npm view "$ALIAS" versions --json)
-          if echo "$VERSIONS" | jq -e --arg version "$VERSION" 'index($version) != null' > /dev/null; then
+          # npm prints a bare string rather than an array for a name with one version, and an exact match is wanted either way, not a substring one.
+          if echo "$VERSIONS" | jq -e --arg version "$VERSION" '[.] | flatten | index($version) != null' > /dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$ALIAS@$VERSION is already published."
           fi
@@ -326,10 +333,22 @@ jobs:
         if: steps.existing.outputs.published != 'true'
         run: |
           PACK_DIR="$RUNNER_TEMP/alias-pack"
+          rm -rf "$PACK_DIR"
           mkdir -p "$PACK_DIR/alias" "$PACK_DIR/primary"
+          # The tarball is found in the destination rather than read from npm's --json output: its shape is not stable across npm majors (an array of entries up to npm 11, an object keyed by package name from npm 12), and a warning or lifecycle output can share stdout. The destinations start empty, so exactly one .tgz is the pack.
+          single_tarball() {
+            local found=("$1"/*.tgz)
+            if [ "${#found[@]}" -ne 1 ] || [ ! -f "${found[0]}" ]; then
+              echo "::error::Expected exactly one tarball in $1, found: ${found[*]}"
+              exit 1
+            fi
+            echo "${found[0]}"
+          }
           # --ignore-scripts: the build is already done, and prepare would install git hooks into the runner's checkout.
-          TARBALL="$PACK_DIR/alias/$(npm pack --ignore-scripts --json --pack-destination "$PACK_DIR/alias" | jq -r '.[0].filename')"
-          PRIMARY_TARBALL="$PACK_DIR/primary/$(npm pack "$PRIMARY@$VERSION" --json --pack-destination "$PACK_DIR/primary" | jq -r '.[0].filename')"
+          npm pack --ignore-scripts --pack-destination "$PACK_DIR/alias" > /dev/null
+          npm pack "$PRIMARY@$VERSION" --pack-destination "$PACK_DIR/primary" > /dev/null
+          TARBALL=$(single_tarball "$PACK_DIR/alias")
+          PRIMARY_TARBALL=$(single_tarball "$PACK_DIR/primary")
           tar -xzf "$TARBALL" -C "$PACK_DIR/alias"
           tar -xzf "$PRIMARY_TARBALL" -C "$PACK_DIR/primary"
           if ! diff -r --exclude=package.json "$PACK_DIR/primary/package" "$PACK_DIR/alias/package"; then
