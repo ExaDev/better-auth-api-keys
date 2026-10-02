@@ -16,7 +16,7 @@ import {
 
 const timestamp = (name: string) => integer(name, { mode: "timestamp_ms" });
 
-// better-auth's core tables, as packages/db declares them, so better-auth's own schema check sees a complete database.
+// better-auth's core tables, declared as a host using Drizzle on SQLite would declare them, so better-auth's own schema check sees a complete database.
 const user = sqliteTable("user", {
   id: text().primaryKey(),
   name: text().notNull(),

@@ -27,7 +27,7 @@ export const TEST_START = new Date("2026-03-01T09:00:00.000Z");
 /** The seed the service fixture's random source starts from, so a failing run replays exactly. */
 const SERVICE_RANDOM_SEED = 42;
 
-/** A scope shape like the one this repository's host uses, to exercise the injected schema. */
+/** A scope shape like one a host might use, to exercise the injected schema. */
 export const testScopesSchema = z.object({
   access: z.enum(["read", "write", "all"]),
   toolsets: z.optional(z.array(z.string())),
