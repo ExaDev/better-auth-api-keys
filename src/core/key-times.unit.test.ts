@@ -23,4 +23,9 @@ describe("key times", () => {
     expect(isExpired(at, at)).toBe(true);
     expect(isExpired(at, new Date(at.getTime() + 1))).toBe(true);
   });
+
+  it("never treats a key with no expiry as expired", () => {
+    expect(isExpired(null, at)).toBe(false);
+    expect(isExpired(null, new Date("9999-12-31T23:59:59.999Z"))).toBe(false);
+  });
 });

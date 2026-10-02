@@ -170,7 +170,7 @@ describe("the adapter store's owner invariant", () => {
         scopes: { access: "read" },
         claims: { provider: "google" },
         createdAt: new Date(0),
-        expiresAt: new Date(0),
+        expiresAt: null,
         lastUsedAt: null,
       },
       forceAllowId: true,
@@ -230,7 +230,7 @@ describe("the adapter store's owner invariant", () => {
     });
     expect(await store.findByHash(persons)).toMatchObject({
       outcome: "found",
-      key: { owner: user("alice") },
+      key: { owner: user("alice"), expiresAt: null },
     });
     expect(await store.findByHash(principals)).toMatchObject({
       outcome: "found",
@@ -239,13 +239,17 @@ describe("the adapter store's owner invariant", () => {
   });
 
   it("writes a principal's key with no user reference, and a person's with one matching its owner", async () => {
-    const plugin = testPlugin();
+    const plugin = apiKeys({
+      ...testPluginOptions(),
+      allowNonExpiringSystemKeys: true,
+    });
     const context = await authWith({ plugins: [plugin] }).$context;
     await addUser(context.adapter, "alice");
     const service = apiKeysOf(context, plugin);
     const principals = await service.create({
       ...createInput,
       owner: { kind: "system", id: "alice" },
+      lifetimeMs: null,
     });
     const persons = await service.create(createInput);
     if (principals.outcome !== "created" || persons.outcome !== "created") {
@@ -259,6 +263,7 @@ describe("the adapter store's owner invariant", () => {
           ownerKind: "system",
           ownerId: "alice",
           userId: null,
+          expiresAt: null,
         }),
         expect.objectContaining({
           id: persons.key.id,
@@ -268,6 +273,18 @@ describe("the adapter store's owner invariant", () => {
         }),
       ]),
     );
+  });
+
+  it("refuses a principal's key with no expiry unless the plugin is configured to allow one", async () => {
+    const plugin = testPlugin();
+    const context = await authWith({ plugins: [plugin] }).$context;
+    expect(
+      await apiKeysOf(context, plugin).create({
+        ...createInput,
+        owner: { kind: "system", id: "deployer" },
+        lifetimeMs: null,
+      }),
+    ).toEqual({ outcome: "invalid", field: "lifetime" });
   });
 });
 
@@ -289,7 +306,7 @@ describe("apiKeySchema", () => {
           scopes: { type: "json", required: true },
           claims: { type: "json", required: true },
           createdAt: { type: "date", required: true },
-          expiresAt: { type: "date", required: true },
+          expiresAt: { type: "date", required: false },
           lastUsedAt: { type: "date", required: false },
         },
         indexes: [

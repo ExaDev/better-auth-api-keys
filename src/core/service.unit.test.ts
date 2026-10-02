@@ -41,6 +41,8 @@ const bob = { id: "bob" };
 const deployer = { kind: "system", id: "deployer" } as const;
 /** A system principal whose id is the same string as the person `alice`'s. */
 const aliceSystem = { kind: "system", id: "alice" } as const;
+/** Far enough past any lifetime the tests use that every key with an expiry has expired. */
+const YEARS_LATER = 10;
 
 function input(
   overrides: Partial<CreateApiKeyInput<TestScopes, TestClaims>> = {},
@@ -672,8 +674,10 @@ describe("system principals' keys", () => {
     );
   });
 
-  it("applies the usual expiry rules to a principal's key", async () => {
-    const { service, clock } = serviceFixture();
+  it("applies the usual expiry rules to a principal's key created with a lifetime", async () => {
+    const { service, clock } = serviceFixture({
+      allowNonExpiringSystemKeys: true,
+    });
     expect(
       await service.create(
         input({ owner: deployer, lifetimeMs: TEST_MAX_LIFETIME_MS + 1 }),
@@ -698,9 +702,92 @@ describe("system principals' keys", () => {
     });
   });
 
+  it("refuses a key with no expiry for a person, even when the host allows principals' keys to have none", async () => {
+    const { service, store } = serviceFixture({
+      allowNonExpiringSystemKeys: true,
+    });
+    for (const owner of [alice, { kind: "user", id: "alice" } as const]) {
+      expect(await service.create(input({ owner, lifetimeMs: null }))).toEqual({
+        outcome: "invalid",
+        field: "lifetime",
+      });
+    }
+    expect(await store.listByOwner(user("alice"))).toEqual([]);
+  });
+
+  it.each([
+    ["by default", {}],
+    ["when the host turns it off", { allowNonExpiringSystemKeys: false }],
+  ])("refuses a principal's key with no expiry %s", async (_, options) => {
+    const { service, store } = serviceFixture(options);
+    expect(
+      await service.create(input({ owner: deployer, lifetimeMs: null })),
+    ).toEqual({ outcome: "invalid", field: "lifetime" });
+    expect(await store.listByOwner(system("deployer"))).toEqual([]);
+  });
+
+  it("creates a principal's key with no expiry when the host allows it, which never expires", async () => {
+    const { service, clock } = serviceFixture({
+      allowNonExpiringSystemKeys: true,
+    });
+    const created = await service.create(
+      input({ owner: deployer, lifetimeMs: null }),
+    );
+    if (created.outcome !== "created") throw new Error(created.outcome);
+    expect(created.key.expiresAt).toBeNull();
+    clock.advance(YEARS_LATER * TEST_MAX_LIFETIME_MS);
+    expect(await service.verify(created.plaintext)).toEqual({
+      outcome: "valid",
+      key: created.key,
+    });
+    expect(await service.list(deployer)).toEqual([
+      { status: "valid", key: created.key },
+    ]);
+  });
+
+  it("refuses a stored key with no expiry unless it is a principal's and the host allows it, listing it as unreadable so it can be revoked", async () => {
+    const store = createInMemoryApiKeyStore();
+    const allowing = serviceFixture({
+      store,
+      allowNonExpiringSystemKeys: true,
+    });
+    const principals = await allowing.service.create(
+      input({ owner: deployer, lifetimeMs: null }),
+    );
+    const persons = await allowing.service.create(input());
+    if (principals.outcome !== "created" || persons.outcome !== "created") {
+      throw new Error("not created");
+    }
+    const [storedPersons] = await store.listByOwner(user("alice"));
+    if (storedPersons === undefined) throw new Error("not stored");
+    await store.delete({ id: storedPersons.id });
+    await store.insert({ ...storedPersons, expiresAt: null });
+    expect(await allowing.service.verify(persons.plaintext)).toEqual({
+      outcome: "unknown",
+    });
+    expect(await allowing.service.list(alice)).toMatchObject([
+      { status: "unreadable", key: { expiresAt: null } },
+    ]);
+
+    const { service } = serviceFixture({ store });
+    expect(await service.verify(principals.plaintext)).toEqual({
+      outcome: "unknown",
+    });
+    expect(await service.list(deployer)).toMatchObject([
+      { status: "unreadable", key: { id: principals.key.id } },
+    ]);
+    expect(
+      await service.revoke({ id: principals.key.id, owner: deployer }),
+    ).toEqual({ outcome: "revoked" });
+  });
+
   it("throttles the last-used write of a principal's key as it does a person's", async () => {
-    const { service, store, clock, deferred, defer } = serviceFixture();
-    const created = await service.create(input({ owner: deployer }));
+    const { service, store, clock, deferred, defer } = serviceFixture({
+      allowNonExpiringSystemKeys: true,
+    });
+    const created = await service.create(
+      input({ owner: deployer, lifetimeMs: null }),
+    );
     if (created.outcome !== "created") throw new Error(created.outcome);
     const use = async () => {
       const verified = await service.verify(created.plaintext);

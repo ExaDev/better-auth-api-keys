@@ -13,7 +13,7 @@ export function isLastUsedStale(
   return lastUsedAt === undefined || lastUsedAt.getTime() < notSince.getTime();
 }
 
-/** Whether a key expiring at `expiresAt` has expired at `now`. A key is valid up to, but not at, its expiry instant. */
-export function isExpired(expiresAt: Date, now: Date): boolean {
-  return now.getTime() >= expiresAt.getTime();
+/** Whether a key expiring at `expiresAt` has expired at `now`. A key is valid up to, but not at, its expiry instant; a key with no expiry (`null`, which only a system principal's key can have) never expires. */
+export function isExpired(expiresAt: Date | null, now: Date): boolean {
+  return expiresAt !== null && now.getTime() >= expiresAt.getTime();
 }

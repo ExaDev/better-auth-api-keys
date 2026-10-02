@@ -34,7 +34,7 @@ export interface ApiKeySchemaOverrides {
  *
  * A key's owner is `ownerKind` (`"user"` or `"system"`) and `ownerId`, both required. A person's key also sets `userId` to the same id, referencing `user.id`, so deleting the person deletes their keys; a system principal's key leaves `userId` null, and its `ownerId` references nothing, so no deletion in better-auth's tables touches it. The owner is not simply a nullable `userId` beside a nullable `systemId` because better-auth refuses a unique index over a column that is not required (SQL Server and MongoDB treat nulls in a unique index as equal, so it would not behave the same everywhere), and a name must be unique per owner. better-auth's schema cannot express a check across columns either, so the adapter-backed store always writes a consistent row and refuses to read one whose `userId` disagrees with its owner, and a host's own migration may add the check as well (the README gives it).
  *
- * `keyHash` is unique, which is the index a verification's single lookup uses. `(ownerKind, ownerId, name)` is unique too, so a name is unique per owner, and a person and a principal with the same id are different owners; that compound index also serves every by-owner query. `userId` has an index of its own for the cascading delete, which would otherwise scan the table for each person deleted. `lastUsedAt` is deliberately not indexed: nothing queries by it, and an index would turn each throttled last-used write into two.
+ * `keyHash` is unique, which is the index a verification's single lookup uses. `(ownerKind, ownerId, name)` is unique too, so a name is unique per owner, and a person and a principal with the same id are different owners; that compound index also serves every by-owner query. `userId` has an index of its own for the cascading delete, which would otherwise scan the table for each person deleted. `expiresAt` is null for a system key created with no expiry. `lastUsedAt` is deliberately not indexed: nothing queries by it, and an index would turn each throttled last-used write into two.
  */
 export function apiKeySchema(
   overrides?: ApiKeySchemaOverrides,
@@ -56,7 +56,7 @@ export function apiKeySchema(
           scopes: { type: "json", required: true },
           claims: { type: "json", required: true },
           createdAt: { type: "date", required: true },
-          expiresAt: { type: "date", required: true },
+          expiresAt: { type: "date", required: false },
           lastUsedAt: { type: "date", required: false },
         } satisfies Record<ApiKeyField, DBFieldAttribute>,
         indexes: [

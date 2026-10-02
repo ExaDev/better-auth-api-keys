@@ -229,8 +229,8 @@ export function describeApiKeyStoreContract(
       });
     });
 
-    it("finds a system principal's key, every field intact", async () => {
-      const key = storedKey(system("deployer"));
+    it("finds a system principal's key with no expiry, every field intact", async () => {
+      const key = storedKey(system("deployer"), { expiresAt: null });
       expect(await store.insert(key)).toEqual({ outcome: "inserted" });
       expect(await store.findByHash(key.keyHash)).toEqual({
         outcome: "found",
@@ -296,7 +296,7 @@ export function describeApiKeyStoreContract(
     });
 
     it("writes the last-used time of a system principal's key", async () => {
-      const key = storedKey(system("deployer"));
+      const key = storedKey(system("deployer"), { expiresAt: null });
       await store.insert(key);
       const at = new Date("2026-02-01T12:00:00.000Z");
       expect(

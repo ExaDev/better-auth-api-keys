@@ -140,8 +140,13 @@ function spiedClock(clock: Readonly<Clock>, record: Recorder): Clock {
   };
 }
 
-/** A service over the in-memory store (or `store`), a manual clock, a seeded random source and a real Web Crypto hasher, with every port call recorded. */
-export function serviceFixture(options: { readonly store?: ApiKeyStore } = {}) {
+/** A service over the in-memory store (or `store`), a manual clock, a seeded random source and a real Web Crypto hasher, with every port call recorded. System keys may have no expiry only when `allowNonExpiringSystemKeys` says so. */
+export function serviceFixture(
+  options: {
+    readonly store?: ApiKeyStore;
+    readonly allowNonExpiringSystemKeys?: boolean;
+  } = {},
+) {
   const calls: PortCall[] = [];
   const record: Recorder = (call) => {
     calls.push(call);
@@ -153,6 +158,7 @@ export function serviceFixture(options: { readonly store?: ApiKeyStore } = {}) {
     prefix: TEST_PREFIX,
     maxLifetimeMs: TEST_MAX_LIFETIME_MS,
     lastUsedIntervalMs: TEST_LAST_USED_INTERVAL_MS,
+    allowNonExpiringSystemKeys: options.allowNonExpiringSystemKeys,
     store: spiedStore(store, record),
     hasher: spiedHasher(createWebCryptoKeyHasher("test pepper"), record),
     random: spiedRandom(seededRandomSource(SERVICE_RANDOM_SEED), record),

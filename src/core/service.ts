@@ -37,10 +37,12 @@ export type JsonObjectSchema = z.core.$ZodType<
 export const apiKeyServiceConfigSchema = z.object({
   /** Starts every key, so a leaked key is recognisable: a short, distinctive string the host chooses, such as `exshow_`. */
   prefix: z.string().check(z.regex(KEY_PREFIX_PATTERN)),
-  /** The longest lifetime a key may be created with. Every key expires. */
+  /** The longest lifetime a key may be created with. Every key expires, unless `allowNonExpiringSystemKeys` lets a system principal's key be created with none. */
   maxLifetimeMs: z.number().check(z.int(), z.positive()),
   /** How stale a key's last-used time may get before a verification writes it again, which bounds the writes verification costs to one per key per interval. */
   lastUsedIntervalMs: z.number().check(z.int(), z.positive()),
+  /** Whether a system principal's key may have no expiry (`lifetimeMs: null`). Off unless the host turns it on; a person's key always expires whatever this says. Checked on every read as well as on creation, so turning it off disables every key created with no expiry. */
+  allowNonExpiringSystemKeys: z.optional(z.boolean()),
 });
 export type ApiKeyServiceConfig = z.output<typeof apiKeyServiceConfigSchema>;
 
@@ -70,11 +72,13 @@ export interface ApiKeyServiceOptions<
   readonly authoriser: ScopeAuthoriser<z.output<ScopesSchema>, Request>;
 }
 
-/** What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`. */
+/**
+ * What {@link ApiKeyService.create} needs. `lifetimeMs` is from the moment of creation, positive and at most the service's `maxLifetimeMs`; `null` creates a key that never expires, which is refused unless the owner is a system principal and the service's `allowNonExpiringSystemKeys` is on.
+ */
 export interface CreateApiKeyInput<Scopes, Claims> {
   readonly owner: ApiKeyOwnerInput;
   readonly name: string;
-  readonly lifetimeMs: number;
+  readonly lifetimeMs: number | null;
   readonly scopes: Scopes;
   readonly claims: Claims;
 }
@@ -94,7 +98,7 @@ export type CreateApiKeyResult<Scopes, Claims> =
   | { readonly outcome: "name-taken" };
 
 /**
- * The result of {@link ApiKeyService.verify}. `malformed` means the presented string failed the offline check, so nothing was hashed or read; `unknown` means no stored key matches it, or the stored key's scopes or claims no longer pass the host's schemas; `expired` names the key, its owner and when it was created, so the host can say which key it was and still apply its own refusals that outrank expiry (a disabled owner, or a key older than the owner's last sign-out everywhere). In both `valid` and `expired`, `owner.kind` tells a person's key from a system principal's, and narrows `owner` to that kind.
+ * The result of {@link ApiKeyService.verify}. `malformed` means the presented string failed the offline check, so nothing was hashed or read; `unknown` means no stored key matches it, or the stored key's scopes or claims no longer pass the host's schemas, or it has no expiry and is not a system principal's key while the host allows those; `expired` names the key, its owner and when it was created, so the host can say which key it was and still apply its own refusals that outrank expiry (a disabled owner, or a key older than the owner's last sign-out everywhere). In both `valid` and `expired`, `owner.kind` tells a person's key from a system principal's, and narrows `owner` to that kind.
  */
 export type VerifyApiKeyResult<Scopes, Claims> =
   | { readonly outcome: "valid"; readonly key: ApiKey<Scopes, Claims> }
@@ -120,7 +124,7 @@ export interface RecordApiKeyUseOptions extends PortCallOptions {
 export type RecordApiKeyUseResult =
   { readonly outcome: "scheduled" } | { readonly outcome: "not-due" };
 
-/** One entry of {@link ApiKeyService.list}. A key whose stored scopes or claims no longer pass the host's schemas is listed as `unreadable` rather than hidden, so its owner can still see and revoke it. */
+/** One entry of {@link ApiKeyService.list}. A key whose stored scopes or claims no longer pass the host's schemas, or that has no expiry the service would let it have, is listed as `unreadable` rather than hidden, so its owner can still see and revoke it. */
 export type ListedApiKey<Scopes, Claims> =
   | { readonly status: "valid"; readonly key: ApiKey<Scopes, Claims> }
   | { readonly status: "unreadable"; readonly key: ApiKeySummary };
@@ -206,18 +210,45 @@ export function createApiKeyService<
 ): ApiKeyService<z.output<ScopesSchema>, z.output<ClaimsSchema>, Request> {
   type Scopes = z.output<ScopesSchema>;
   type Claims = z.output<ClaimsSchema>;
-  const { prefix, maxLifetimeMs, lastUsedIntervalMs } =
-    parseApiKeyServiceConfig({
-      prefix: options.prefix,
-      maxLifetimeMs: options.maxLifetimeMs,
-      lastUsedIntervalMs: options.lastUsedIntervalMs,
-    });
+  const {
+    prefix,
+    maxLifetimeMs,
+    lastUsedIntervalMs,
+    allowNonExpiringSystemKeys,
+  } = parseApiKeyServiceConfig({
+    prefix: options.prefix,
+    maxLifetimeMs: options.maxLifetimeMs,
+    lastUsedIntervalMs: options.lastUsedIntervalMs,
+    allowNonExpiringSystemKeys: options.allowNonExpiringSystemKeys,
+  });
   const { store, hasher, random, clock, authoriser } = options;
   const lifetimeSchema = z
     .number()
     .check(z.int(), z.positive(), z.lte(maxLifetimeMs));
 
+  /** Whether a key of `owner`'s may have no expiry: only a system principal's, and only while the host allows it. Applied on creation and on every read, so turning the setting off disables the keys it let through. */
+  function mayNeverExpire(owner: Readonly<ApiKeyOwner>): boolean {
+    return owner.kind === "system" && allowNonExpiringSystemKeys === true;
+  }
+
+  /** The lifetime a key for `owner` may be created with: `lifetimeMs` itself when the service accepts it, or `undefined` when it is refused. */
+  function acceptedLifetime(
+    owner: ApiKeyOwner,
+    lifetimeMs: number | null,
+  ): { readonly ms: number | null } | undefined {
+    if (lifetimeMs === null) {
+      return mayNeverExpire(owner) ? { ms: null } : undefined;
+    }
+    const lifetime = z.safeParse(lifetimeSchema, lifetimeMs);
+
+    return lifetime.success ? { ms: lifetime.data } : undefined;
+  }
+
+  /** The stored key typed by the host's schemas, or `undefined` when its scopes or claims no longer pass them or it has no expiry it may not have. */
   function readable(stored: StoredApiKey): ApiKey<Scopes, Claims> | undefined {
+    if (stored.expiresAt === null && !mayNeverExpire(stored.owner)) {
+      return undefined;
+    }
     const scopes = z.safeParse(options.scopes, stored.scopes);
     const claims = z.safeParse(options.claims, stored.claims);
     if (!scopes.success || !claims.success) return undefined;
@@ -232,8 +263,10 @@ export function createApiKeyService<
       if (!owner.success) return { outcome: "invalid", field: "owner" };
       const name = z.safeParse(apiKeyNameSchema, input.name);
       if (!name.success) return { outcome: "invalid", field: "name" };
-      const lifetime = z.safeParse(lifetimeSchema, input.lifetimeMs);
-      if (!lifetime.success) return { outcome: "invalid", field: "lifetime" };
+      const lifetime = acceptedLifetime(owner.data, input.lifetimeMs);
+      if (lifetime === undefined) {
+        return { outcome: "invalid", field: "lifetime" };
+      }
       const scopes = z.safeParse(options.scopes, input.scopes);
       if (!scopes.success) return { outcome: "invalid", field: "scopes" };
       const claims = z.safeParse(options.claims, input.claims);
@@ -250,7 +283,8 @@ export function createApiKeyService<
         scopes: scopes.data,
         claims: claims.data,
         createdAt: now,
-        expiresAt: new Date(now.getTime() + lifetime.data),
+        expiresAt:
+          lifetime.ms === null ? null : new Date(now.getTime() + lifetime.ms),
         lastUsedAt: undefined,
       };
       const inserted = await store.insert(stored, callOptions);
