@@ -8,6 +8,7 @@ import {
   testPluginOptions,
   type TestPlugin,
 } from "../test-support/plugin-fixture.ts";
+import { API_KEY_CREATED_BY_MAX_LENGTH } from "../contract/index.ts";
 import { DAY_MS } from "../test-support/service-fixture.ts";
 import {
   describeApiKeyStoreContract,
@@ -231,34 +232,43 @@ describe("the adapter store's owner invariant", () => {
     },
   );
 
-  it("lists a row whose creator fails its schema as corrupt, and the service lists it for revoking", async () => {
-    const plugin = testPlugin();
-    const context = await authWith({ plugins: [plugin] }).$context;
-    await addUser(context.adapter, "alice");
-    const service = apiKeysOf(context, plugin);
-    const created = await service.create(createInput);
-    if (created.outcome !== "created") throw new Error(created.outcome);
-    const corrupt = await insertRow(context.adapter, {
-      ownerKind: "user",
-      ownerId: "alice",
-      userId: "alice",
-    });
-    await context.adapter.updateMany({
-      model: API_KEY_MODEL,
-      where: [{ field: "id", value: corrupt }],
-      update: { createdBy: "", expiresAt: new Date(1) },
-    });
-    expect(await service.list(user("alice"))).toEqual([
-      { status: "valid", key: created.key },
-      { status: "corrupt", id: corrupt, owner: user("alice") },
-    ]);
-    expect(await service.revoke({ id: corrupt, owner: user("alice") })).toEqual(
-      { outcome: "revoked" },
-    );
-    expect(await service.list(user("alice"))).toEqual([
-      { status: "valid", key: created.key },
-    ]);
-  });
+  it.each([
+    ["an empty creator", ""],
+    [
+      "a creator over the length limit",
+      "x".repeat(API_KEY_CREATED_BY_MAX_LENGTH + 1),
+    ],
+  ])(
+    "lists a row with %s as corrupt, and the service lists it for revoking",
+    async (_, createdBy) => {
+      const plugin = testPlugin();
+      const context = await authWith({ plugins: [plugin] }).$context;
+      await addUser(context.adapter, "alice");
+      const service = apiKeysOf(context, plugin);
+      const created = await service.create(createInput);
+      if (created.outcome !== "created") throw new Error(created.outcome);
+      const corrupt = await insertRow(context.adapter, {
+        ownerKind: "user",
+        ownerId: "alice",
+        userId: "alice",
+      });
+      await context.adapter.updateMany({
+        model: API_KEY_MODEL,
+        where: [{ field: "id", value: corrupt }],
+        update: { createdBy, expiresAt: new Date(1) },
+      });
+      expect(await service.list(user("alice"))).toEqual([
+        { status: "valid", key: created.key },
+        { status: "corrupt", id: corrupt, owner: user("alice") },
+      ]);
+      expect(
+        await service.revoke({ id: corrupt, owner: user("alice") }),
+      ).toEqual({ outcome: "revoked" });
+      expect(await service.list(user("alice"))).toEqual([
+        { status: "valid", key: created.key },
+      ]);
+    },
+  );
 
   it("reads a consistent row of either kind", async () => {
     const context = await authWith({ plugins: [testPlugin()] }).$context;
