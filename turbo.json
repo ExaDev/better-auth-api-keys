@@ -35,5 +35,6 @@
       ],
       "outputs": []
     }
-  }
+  },
+  "agentGuidance": false
 }
