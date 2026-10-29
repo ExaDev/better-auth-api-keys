@@ -1,5 +1,7 @@
 # @exadev/better-auth-api-keys
 
+[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/ExaDev/better-auth-api-keys) [![npm](https://img.shields.io/badge/npm-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/package/@exadev/better-auth-api-keys) [![Release](https://img.shields.io/github/v/release/ExaDev/better-auth-api-keys)](https://github.com/ExaDev/better-auth-api-keys/releases/latest) [![CI](https://img.shields.io/github/actions/workflow/status/ExaDev/better-auth-api-keys/ci.yml?branch=main)](https://github.com/ExaDev/better-auth-api-keys/actions)
+
 A [better-auth](https://www.better-auth.com/) plugin for long-lived API keys, for unattended scripts and services calling an API as a person, or as a system principal the host defines that belongs to no person. It has no runtime dependencies of its own: `zod`, `better-auth` and `@better-auth/core` are peers, so the plugin parses with the same Zod your scope and claim schemas were built with, and runs on the better-auth your app already has. It uses only Web APIs, so it runs unchanged in Cloudflare Workers, browsers and Node 22 or later.
 
 ```sh
